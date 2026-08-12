@@ -11,7 +11,7 @@ A living catalogue of **agent skills for robotics** — Isaac Sim, Isaac Lab, Ne
 ## Quick start
 
 ```bash
-git clone https://github.com/GTU-DASH-LAB/amazing-robotics-skills.git
+git clone https://github.com/fouad1233/amazing-robotics-skills.git
 cd amazing-robotics-skills
 python3 scripts/install.py --list
 ```

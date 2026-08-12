@@ -14,6 +14,7 @@ Requires the `gh` CLI, authenticated (`gh auth status`).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pathlib
 import shutil
@@ -33,6 +34,60 @@ ORGS = [
     "NVIDIA",
     "newton-physics",
     "NVIDIA-AI-IOT",
+]
+# NOTE: org-wide sweeps of `huggingface` and `rerun-io` were tried and removed.
+# They pulled in 40+ unrelated repos (transformers, diffusers, chat-ui, blog,
+# kernels, mlclaw...). The robotics-relevant repos from those orgs are named
+# individually in EXTRA_REPOS instead. Breadth is not the goal; a robotics
+# engineer finding the right skill in ten seconds is.
+
+# Individual repos outside the swept orgs. Org sweeps are cheap but coarse;
+# the robotics skill ecosystem is scattered across many small orgs.
+EXTRA_REPOS = [
+    "ros-claw/rosclaw",
+    "spacemit-robotics/robot-skills",
+    "D-Robotics/moss",
+    "nebius/nebius-physical-ai",
+    "ambient-robots/xlerobot_pinc",
+    "Seeed-Projects/Seeed-Jetson-DevelopTool",
+    "OpenGalaxea/GalaxeaVLA",
+    "AgibotTech/genie_sim",
+    # ROS 2. Note: the official ROS orgs (ros2, moveit, ros-planning,
+    # ros-navigation, ros-controls) ship no SKILL.md files at all, and neither
+    # does NVIDIA-ISAAC-ROS across its 65 repos — verified by tree walk.
+    # Everything here is community work.
+    "arpitg1304/robotics-agent-skills",
+    "castacks/AirStack",
+    "harunkurtdev/ros2-claude-code-template",
+    "MIUAV/vibe-coding-ros2",
+    # Hugging Face + Rerun: named individually rather than swept, see ORGS note.
+    "huggingface/skills",
+    "huggingface/OpenEnv",
+    "rerun-io/rerun",
+    "rerun-io/trossen-oss",
+]
+
+# Never ingest these, whatever a search turns up.
+# claude-skill-registry is a mass scrape of ~21,000 skills across every domain;
+# its "robotics" matches are false positives and it would bury this catalogue.
+EXCLUDE_REPOS = {
+    "majiayu000/claude-skill-registry",
+    "gabrielmoreira/agent-skills-mirror",
+    "LeoYeAI/openclaw-master-skills",
+    "sige0002/skill_store",
+    "SpectreDeath/skill-flywheel",
+}
+
+# Agent-facing docs that are not SKILL.md but serve the same purpose. Some
+# major robotics repos ship AGENTS.md/CLAUDE.md instead of skills — LeRobot
+# is the notable one. Vendored into reference/ rather than skills/.
+AGENT_DOCS = [
+    ("huggingface/lerobot", "AGENTS.md", "lerobot"),
+    ("huggingface/lerobot", "CLAUDE.md", "lerobot"),
+    ("huggingface/leLab", "CLAUDE.md", "lerobot"),
+    ("isaac-sim/IsaacLab", "AGENTS.md", "isaac-lab"),
+    ("isaac-sim/IsaacSim", "AGENTS.md", "isaac-sim"),
+    ("isaac-sim/IsaacSim", "CLAUDE.md", "isaac-sim"),
 ]
 
 # SPDX ids we are willing to vendor (copy into this repo).
@@ -95,12 +150,35 @@ CATEGORY = {
     "NVIDIA/TensorRT": "inference",
     "NVIDIA/TensorRT-LLM": "inference",
     "NVIDIA/DALI": "inference",
+    # --- LeRobot ecosystem ---
+    "huggingface/lerobot": "lerobot",
+    "ambient-robots/xlerobot_pinc": "lerobot",
+    # --- ROS 2 ---
+    "ros-claw/rosclaw": "ros2",
+    "arpitg1304/robotics-agent-skills": "ros2",
+    "castacks/AirStack": "ros2",
+    "harunkurtdev/ros2-claude-code-template": "ros2",
+    "MIUAV/vibe-coding-ros2": "ros2",
+    # --- robot platforms & sim ---
+    "spacemit-robotics/robot-skills": "robot-platforms",
+    "D-Robotics/moss": "robot-platforms",
+    "AgibotTech/genie_sim": "robot-platforms",
+    "OpenGalaxea/GalaxeaVLA": "robot-platforms",
+    "nebius/nebius-physical-ai": "robot-platforms",
+    "Seeed-Projects/Seeed-Jetson-DevelopTool": "jetson",
+    # --- visualisation / debugging ---
+    "rerun-io/rerun": "visualization",
+    "rerun-io/trossen-oss": "robot-platforms",
+    # --- hugging face tooling ---
+    "huggingface/skills": "huggingface",
+    "huggingface/OpenEnv": "huggingface",
     # --- model training infrastructure (secondary to robotics) ---
     "NVIDIA/Megatron-LM": "ml-infra",
     "NVIDIA/NemoClaw": "ml-infra",
     "NVIDIA/cudf": "ml-infra",
     "NVIDIA/OpenShell": "ml-infra",
     "NVIDIA/SkillSpector": "ml-infra",
+    "NVIDIA/skills": "nvidia-products",
 }
 DEFAULT_CATEGORY = "other"
 
@@ -108,7 +186,8 @@ DEFAULT_CATEGORY = "other"
 # listed here is still catalogued, just presented as secondary.
 ROBOTICS_CATEGORIES = [
     "isaac-sim", "isaac-lab", "newton", "physx", "warp",
-    "usd", "omniverse", "jetson", "perception",
+    "usd", "omniverse", "lerobot", "ros2", "robot-platforms",
+    "jetson", "perception", "visualization",
 ]
 
 
@@ -123,8 +202,9 @@ def gh(*args: str) -> str:
 
 
 def discover() -> dict[str, list[str]]:
-    """Return {repo: [skill paths]} across all orgs."""
+    """Return {repo: [skill paths]} across all orgs plus the extra repos."""
     found: dict[str, list[str]] = {}
+
     for org in ORGS:
         raw = gh(
             "search", "code", "--owner", org, "--filename", "SKILL.md",
@@ -139,7 +219,23 @@ def discover() -> dict[str, list[str]]:
         for hit in hits:
             repo = hit["repository"]["nameWithOwner"]
             found.setdefault(repo, []).append(hit["path"])
-    return {r: sorted(set(p)) for r, p in found.items()}
+
+    # Individual repos: walk the git tree directly rather than code search,
+    # which is both exact and immune to search indexing lag.
+    for repo in EXTRA_REPOS:
+        branch = default_branch(repo)
+        raw = gh(
+            "api", f"repos/{repo}/git/trees/{branch}?recursive=1",
+            "--jq", '[.tree[] | select(.path|test("SKILL\\\\.md$"))] | .[].path',
+        )
+        for path in filter(None, (p.strip() for p in raw.splitlines())):
+            found.setdefault(repo, []).append(path)
+
+    return {
+        r: sorted(set(p))
+        for r, p in found.items()
+        if r not in EXCLUDE_REPOS
+    }
 
 
 def licence_of(repo: str) -> str:
@@ -154,12 +250,27 @@ def default_branch(repo: str) -> str:
     return gh("api", f"repos/{repo}", "--jq", ".default_branch") or "main"
 
 
+CACHE = ROOT / ".sync-cache"
+
+
 def fetch(url: str) -> bytes | None:
+    """Fetch a URL, caching by content hash of the URL.
+
+    Re-running sync.py after a taxonomy change should not re-download several
+    hundred files over a slow link. The cache makes a re-run essentially free;
+    delete .sync-cache/ to force a refresh from upstream.
+    """
+    key = CACHE / (hashlib.sha256(url.encode()).hexdigest()[:32] + ".bin")
+    if key.exists():
+        return key.read_bytes()
     try:
         with urllib.request.urlopen(url, timeout=60) as r:
-            return r.read()
+            body = r.read()
     except Exception:
         return None
+    CACHE.mkdir(parents=True, exist_ok=True)
+    key.write_bytes(body)
+    return body
 
 
 def skill_name(path: str) -> str:
@@ -234,6 +345,50 @@ def main() -> int:
                     print(f"  ~ {name} (catalogued, fetch on demand)")
 
             catalog.append(entry)
+
+    # Agent-facing docs (AGENTS.md / CLAUDE.md) from repos that ship those
+    # instead of skills. LeRobot is the notable one.
+    print("\nAgent docs:")
+    for repo, path, category in AGENT_DOCS:
+        spdx = licence_of(repo)
+        branch = default_branch(repo)
+        raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
+        can_vendor = spdx in REDISTRIBUTABLE
+        name = f"{repo.split('/')[-1]}-{path.replace('.md', '')}".lower()
+        entry = {
+            "name": name,
+            "category": category,
+            "source_repo": repo,
+            "source_path": path,
+            "source_ref": branch,
+            "url": f"https://github.com/{repo}/blob/{branch}/{path}",
+            "raw_url": raw_url,
+            "license": spdx,
+            "vendored": bool(can_vendor),
+            "kind": "agent-doc",
+        }
+        if can_vendor and not args.dry_run:
+            dest = ROOT / "reference" / category / f"{name}.md"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            body = fetch(raw_url)
+            if body is not None:
+                header = (
+                    f"<!-- Vendored from {repo} @ {branch}\n"
+                    f"     Path:    {path}\n"
+                    f"     Licence: {spdx}\n"
+                    f"     Source:  {entry['url']}\n"
+                    f"     Unmodified copy. See NOTICE for attribution. -->\n\n"
+                ).encode()
+                dest.write_bytes(header + body)
+                vendored += 1
+                print(f"  + reference/{category}/{name}.md")
+            else:
+                entry["vendored"] = False
+                linked += 1
+        else:
+            linked += 1
+            print(f"  ~ {name} ({spdx}, link only)")
+        catalog.append(entry)
 
     if args.dry_run:
         print(f"\nDRY RUN: would vendor {vendored}, link {linked}")

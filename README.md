@@ -2,7 +2,7 @@
 
 A living catalogue of **agent skills for robotics** — Isaac Sim, Isaac Lab, Newton, PhysX, Warp, USD, Omniverse and Jetson — collected from NVIDIA's public repositories and kept in sync automatically.
 
-**293 skills across 27 repositories.** Install the ones you need with one command.
+**1,039 skills across 35 repositories.** Install the ones you need with one command.
 
 > A *skill* is a `SKILL.md` workflow guide that an AI coding agent (Claude Code, Cursor, Codex, …) loads to learn a specific task — how to drive Isaac Sim headless over its Python socket, how to convert URDF to USD, how to flash a Jetson. They turn "the agent guesses" into "the agent follows the documented procedure."
 
@@ -42,24 +42,33 @@ Skills land in `~/.claude/skills/<name>/SKILL.md` by default. Point somewhere el
 
 ### Robotics
 
-| Category | What it covers |
-|---|---|
-| **`isaac-sim`** | Driving Isaac Sim programmatically — headless deployment, the remote Python socket (port 8226), sensors, cameras, rendering, navigation, ROS 2 bridge, profiling, troubleshooting |
-| **`isaac-lab`** | Isaac Lab environments and the Arena benchmark suite |
-| **`newton`** | The Newton physics engine — the backend behind Isaac Lab 3.0's multi-backend rewrite |
-| **`physx`** | PhysX simulation, solver behaviour, articulation tuning |
-| **`warp`** | NVIDIA Warp kernels — the GPU-native data pipeline Isaac Lab 3.0 is built on |
-| **`usd`** | USD scene authoring, composition, optimisation and interchange |
-| **`omniverse`** | Omniverse Kit runtime and RTX rendering |
-| **`jetson`** | Jetson bring-up, BSP, device configuration, DeepStream — the deployment target for most robot fleets |
-| **`perception`** | Camera calibration |
+| Category | n | What it covers |
+|---|---|---|
+| **`isaac-sim`** | 32 | Driving Isaac Sim programmatically — headless deployment, the remote Python socket (port 8226), sensors, cameras, rendering, navigation, ROS 2 bridge, profiling, troubleshooting |
+| **`isaac-lab`** | — | Isaac Lab environments and the Arena benchmark suite |
+| **`newton`** | 4 | The Newton physics engine — the backend behind Isaac Lab 3.0's multi-backend rewrite |
+| **`physx`** | 6 | PhysX simulation, solver behaviour, articulation tuning |
+| **`warp`** | 6 | NVIDIA Warp kernels — the GPU-native data pipeline Isaac Lab 3.0 is built on |
+| **`usd`** | 54 | USD scene authoring, composition, optimisation and interchange |
+| **`omniverse`** | — | Omniverse Kit runtime and RTX rendering |
+| **`lerobot`** | 3 | LeRobot and leLab agent guides |
+| **`ros2`** | 30 | ROS 2 packages, bringup, perception, behaviour trees, multi-robot, testing, security |
+| **`robot-platforms`** | 104 | Trossen arms, AgiBot, Galaxea VLA, SpacemiT, physical-AI stacks |
+| **`jetson`** | 137 | Jetson bring-up, BSP, device configuration, DeepStream — the deployment target for most robot fleets |
+| **`perception`** | — | Camera calibration |
+| **`visualization`** | 10 | Rerun — streaming and inspecting robot data |
 
 ### Secondary
 
-| Category | What it covers |
-|---|---|
-| **`inference`** | TensorRT, TensorRT-LLM, DALI — relevant if you deploy VLA/VLM policies at the edge |
-| **`ml-infra`** | Megatron-LM, NeMo, cuDF — large-model training infrastructure |
+| Category | n | What it covers |
+|---|---|---|
+| **`inference`** | 33 | TensorRT, TensorRT-LLM, DALI — relevant if you deploy VLA/VLM policies at the edge |
+| **`huggingface`** | 41 | Hugging Face Hub tooling and OpenEnv |
+| **`ml-infra`** | 56 | Megatron-LM, NeMo, cuDF — large-model training infrastructure |
+
+### Agent reference docs
+
+Some major robotics repos ship `AGENTS.md`/`CLAUDE.md` instead of skills. Those live in [`reference/`](reference/) — currently LeRobot, leLab, Isaac Sim and Isaac Lab.
 
 Full machine-readable index with provenance for every skill: [`sources.json`](sources.json).
 

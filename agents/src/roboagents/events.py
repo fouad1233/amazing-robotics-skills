@@ -27,10 +27,11 @@ import os
 import threading
 import time
 from collections import deque
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, AsyncIterator, Iterable
+from typing import Any
 
 from .config import runs_dir
 
@@ -102,7 +103,7 @@ class Event:
         return json.dumps(asdict(self), default=str)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "Event":
+    def from_dict(cls, raw: dict[str, Any]) -> Event:
         allowed = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in raw.items() if k in allowed})
 
@@ -292,7 +293,7 @@ def latest_run() -> Path | None:
 async def tail_jsonl(path: Path | str, poll: float = 0.25) -> AsyncIterator[Event]:
     """Follow a run file as it is written. Lets a viewer attach to a run that
     is happening in another process without needing the WebSocket server."""
-    handle = Path(path).open()
+    handle = await asyncio.to_thread(Path(path).open)
     try:
         while True:
             line = handle.readline()

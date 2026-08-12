@@ -29,11 +29,11 @@ from .types import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "REGISTRY",
     "Assignment",
     "Finding",
     "Plan",
     "Policy",
-    "REGISTRY",
     "RoboAgent",
     "RoutePlan",
     "SkillEntry",

@@ -149,12 +149,23 @@ class _NotBuiltYet(RuntimeError):
     """
 
 
+#: The views live under ``roboagents.ui``; the CLI names them by what the
+#: subcommand is called. Keeping the mapping here means a subcommand can be
+#: renamed without moving a module, and vice versa.
+_MODULES = {
+    "tui": "ui.terminal",
+    "web": "ui.server",
+    "pets": "ui.pets",
+}
+
+
 def _load(module: str, symbol: str) -> Any:
-    """Import ``roboagents.<module>.<symbol>`` on demand."""
+    """Import the module backing a subcommand, on demand."""
     import importlib
 
+    target = _MODULES.get(module, module)
     try:
-        loaded = importlib.import_module(f".{module}", __package__)
+        loaded = importlib.import_module(f".{target}", __package__)
     except ImportError as exc:
         raise _NotBuiltYet(
             f"roboagents.{module} could not be imported ({exc}). "
@@ -717,7 +728,11 @@ def cmd_tui(args: argparse.Namespace) -> int:
         bus().bind_loop()
         kwargs = _supported(
             run_tui,
-            {"path": Path(args.run).expanduser() if args.run else None, "follow": args.follow},
+            {
+                "path": Path(args.run).expanduser() if args.run else None,
+                "follow": args.follow,
+                "interactive": getattr(args, "interactive", False),
+            },
             term,
         )
         return await run_tui(**kwargs)
@@ -752,12 +767,30 @@ def cmd_web(args: argparse.Namespace) -> int:
                 "host": args.host,
                 "port": args.port,
                 "path": Path(args.run).expanduser() if args.run else None,
+                "session": getattr(args, "session", False),
             },
             term,
         )
         return await serve(**kwargs)
 
     return _drive(go(), term)
+
+
+def _ws_url(url: str) -> str:
+    """Turn the server URL the user typed into the WebSocket the overlay wants.
+
+    The pets take `ws://host:port/ws`; people type `http://host:port`, which is
+    what every other subcommand prints. Accept either.
+    """
+    from urllib.parse import urlparse
+
+    if url.startswith(("ws://", "wss://")):
+        return url if urlparse(url).path not in ("", "/") else url.rstrip("/") + "/ws"
+    parsed = urlparse(url if "//" in url else f"http://{url}")
+    host = parsed.hostname or _DEFAULT_HOST
+    port = parsed.port or _DEFAULT_PORT
+    path = parsed.path if parsed.path not in ("", "/") else "/ws"
+    return f"ws://{host}:{port}{path}"
 
 
 def cmd_pets(args: argparse.Namespace) -> int:
@@ -785,9 +818,11 @@ def cmd_pets(args: argparse.Namespace) -> int:
         term.print("so the overlay has to run under /usr/bin/python3.")
         return 2
 
-    argv = [python3, str(script), "--url", args.url]
+    argv = [python3, str(script), "--url", _ws_url(args.url)]
     if args.scale is not None:
         argv += ["--scale", str(args.scale)]
+    if getattr(args, "interactive", False):
+        argv += ["--interactive"]
     term.print(f"exec {' '.join(argv)}")
     try:
         # execv, not Popen: the overlay should own the terminal and the signals,
@@ -950,6 +985,11 @@ def build_parser() -> argparse.ArgumentParser:
     tui = subparsers.add_parser("tui", help="terminal view of the event stream")
     tui.add_argument("--run", metavar="PATH", help="replay a recorded JSONL transcript")
     tui.add_argument("--follow", action="store_true", help="keep following as events arrive")
+    tui.add_argument(
+        "--interactive",
+        action="store_true",
+        help="accept typed prompts and submit them to the bench",
+    )
     tui.set_defaults(handler=cmd_tui)
 
     web = subparsers.add_parser("web", help="browser game world over the event stream")
@@ -957,11 +997,21 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--port", type=int, default=_DEFAULT_PORT)
     web.add_argument("--run", metavar="PATH", help="serve a recorded JSONL transcript")
     web.add_argument("--open", action="store_true", help="open a browser at the URL")
+    web.add_argument(
+        "--session",
+        action="store_true",
+        help="attach a bench, so prompts typed in the browser actually run",
+    )
     web.set_defaults(handler=cmd_web)
 
     pets = subparsers.add_parser("pets", help="desktop overlay (runs on the system python)")
     pets.add_argument("--url", default=f"http://{_DEFAULT_HOST}:{_DEFAULT_PORT}")
     pets.add_argument("--scale", type=float, default=None, metavar="F", help="sprite scale")
+    pets.add_argument(
+        "--interactive",
+        action="store_true",
+        help="show a console window you can type prompts into",
+    )
     pets.set_defaults(handler=cmd_pets)
 
     replay = subparsers.add_parser("replay", help="re-emit a recorded run onto the event bus")

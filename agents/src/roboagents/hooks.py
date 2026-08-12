@@ -23,7 +23,8 @@ or, for the whole lifetime of a task::
 from __future__ import annotations
 
 import contextlib
-from typing import Any, Callable, Iterator
+from collections.abc import Callable, Iterator
+from typing import Any
 
 from .events import EventBus, Kind, State, bus
 
@@ -76,7 +77,7 @@ def attach(
     def handler(event: Any) -> None:
         try:
             _translate(sink, actor, event)
-        except Exception:  # noqa: BLE001 - a viewer must never break the agent
+        except Exception:  # noqa: BLE001, S110 - a viewer must never break the agent
             pass
 
     unsubscribe = manager.on("*", handler)

@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>roboagents workshop</title>
+<style>
+  /* One file, no CDN, no build step. The only assets are drawn in the canvas. */
+  :root {
+    --bg: #0b0f16;
+    --floor-a: #1b2433;
+    --floor-b: #182031;
+    --panel: #111827;
+    --line: #263141;
+    --fg: #d7e2f0;
+    --dim: #7c8ba3;
+    --accent: #52d0c8;
+    --warn: #f0b429;
+    --bad: #ef5f5f;
+    --good: #6fd47e;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.45 ui-monospace, "JetBrains Mono", "DejaVu Sans Mono", Menlo, monospace;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    overflow: hidden;
+  }
+
+  header {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 14px; margin: 0; letter-spacing: .06em; text-transform: uppercase; }
+  header .sep { color: var(--line); }
+  .counter { color: var(--dim); }
+  .counter b { color: var(--fg); font-weight: 600; }
+  #link { display: flex; align-items: center; gap: 6px; margin-left: auto; color: var(--dim); }
+  #dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); }
+  #dot.on { background: var(--good); }
+
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; min-height: 0; }
+  #stage { position: relative; min-width: 0; min-height: 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #empty {
+    position: absolute; inset: 0; display: grid; place-content: center; text-align: center;
+    color: var(--dim); pointer-events: none; transition: opacity .4s;
+  }
+  #empty.gone { opacity: 0; }
+
+  #side { border-left: 1px solid var(--line); background: var(--panel); display: grid;
+          grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+  #side h2 { margin: 0; padding: 7px 10px; font-size: 11px; letter-spacing: .1em;
+             text-transform: uppercase; color: var(--dim); border-bottom: 1px solid var(--line); }
+  #log { overflow-y: auto; padding: 4px 0 8px; }
+  .row { display: grid; grid-template-columns: 34px 78px 1fr; gap: 6px;
+         padding: 2px 8px; border-bottom: 1px solid rgba(255,255,255,.03); align-items: baseline; }
+  .row .seq { color: #4b5a70; text-align: right; }
+  .row .kind { font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+               color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .msg { overflow: hidden; }
+  .row .who { color: var(--accent); }
+  .row .txt { color: var(--fg); opacity: .82; display: block;
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .k-error .kind, .k-error .txt { color: var(--bad); }
+  .k-verdict .kind { color: var(--warn); }
+  .k-prompt .kind, .k-prompt .who { color: #e5a3ff; }
+  .k-message .kind { color: var(--accent); }
+  .k-run_started .kind, .k-run_finished .kind { color: var(--good); }
+
+  footer { border-top: 1px solid var(--line); background: var(--panel); padding: 8px 12px 10px; }
+  #status { min-height: 17px; color: var(--dim); margin-bottom: 6px; }
+  #status.bad { color: var(--bad); }
+  #status.ok { color: var(--good); }
+  #status.busy { color: var(--warn); }
+  #bar { display: flex; gap: 8px; align-items: flex-end; }
+  #prompt {
+    flex: 1; resize: none; min-height: 32px; max-height: 96px;
+    background: #0c121c; color: var(--fg); border: 1px solid var(--line);
+    border-radius: 4px; padding: 7px 9px; font: inherit;
+  }
+  #prompt:focus { outline: none; border-color: var(--accent); }
+  #prompt:disabled { opacity: .45; }
+  button {
+    background: var(--accent); color: #06231f; border: 0; border-radius: 4px;
+    padding: 8px 16px; font: inherit; font-weight: 700; cursor: pointer; height: 32px;
+  }
+  button:disabled { background: #2c3a4b; color: var(--dim); cursor: not-allowed; }
+
+  details#experts { position: relative; }
+  details#experts > summary {
+    list-style: none; cursor: pointer; height: 32px; display: flex; align-items: center;
+    padding: 0 10px; border: 1px solid var(--line); border-radius: 4px;
+    background: #0c121c; color: var(--dim); white-space: nowrap;
+  }
+  details#experts > summary::-webkit-details-marker { display: none; }
+  #expertList {
+    position: absolute; bottom: 38px; left: 0; width: 260px; max-height: 300px;
+    overflow-y: auto; background: #0c121c; border: 1px solid var(--line);
+    border-radius: 4px; padding: 6px; z-index: 5;
+  }
+  #expertList label { display: block; padding: 3px 4px; cursor: pointer; }
+  #expertList label:hover { background: #16202e; }
+  #expertList .dom { color: var(--dim); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>roboagents workshop</h1>
+  <span class="sep">|</span>
+  <span class="counter">run <b id="runid">—</b></span>
+  <span class="counter">agents <b id="cAgents">0</b></span>
+  <span class="counter">events <b id="cEvents">0</b></span>
+  <span class="counter">messages <b id="cMsgs">0</b></span>
+  <span class="counter">errors <b id="cErrs">0</b></span>
+  <span id="link"><span id="dot"></span><span id="linkText">connecting…</span></span>
+</header>
+
+<main>
+  <div id="stage">
+    <canvas id="world"></canvas>
+    <div id="empty">no events yet — the workshop is empty<br><small>start a run, or type below</small></div>
+  </div>
+  <aside id="side">
+    <h2>event log</h2>
+    <div id="log"></div>
+  </aside>
+</main>
+
+<footer>
+  <div id="status">connecting…</div>
+  <div id="bar">
+    <details id="experts">
+      <summary id="expertsLabel">experts: auto</summary>
+      <div id="expertList"></div>
+    </details>
+    <textarea id="prompt" rows="1" placeholder="tell the workshop what to do… (Enter to send, Shift+Enter for a newline)"></textarea>
+    <button id="send" disabled>Send</button>
+  </div>
+</footer>
+
+<script>
+(() => {
+'use strict';
+
+// ------------------------------------------------------------------ layout
+// One workstation per domain. The fixed list is the roster's own set of
+// domains; anything else the stream mentions gets a desk appended, so an
+// expert we have never heard of still has somewhere to stand.
+const BASE_DOMAINS = ['isaac-sim', 'simops', 'ros2', 'lerobot', 'vla', 'usd', 'newton',
+                      'warp', 'jetson', 'perception', 'inference', 'data', 'repo',
+                      'review', 'skills'];
+const COLS = 5, CELL_X = 220, CELL_Y = 225, ORIGIN_X = 210, ORIGIN_Y = 130;
+const WORLD = { w: 1280, h: 770 };
+const DOOR = { x: 62, y: 330 };
+const ENTRY = { x: 8, y: 330 };
+const WALK_MS = 1000, BUBBLE_MS = 5200, FLASH_MS = 1600, CHECK_MS = 1900;
+
+const desks = new Map();
+function relayout() {
+  const names = [...desks.keys()];
+  names.forEach((name, i) => {
+    const d = desks.get(name);
+    d.x = ORIGIN_X + (i % COLS) * CELL_X;
+    d.y = ORIGIN_Y + Math.floor(i / COLS) * CELL_Y;
+  });
+  const rows = Math.max(1, Math.ceil(names.length / COLS));
+  WORLD.h = ORIGIN_Y + (rows - 1) * CELL_Y + 190;
+}
+function desk(domain) {
+  const key = domain || 'floor';
+  if (!desks.has(key)) { desks.set(key, { name: key, x: 0, y: 0, seats: 0 }); relayout(); }
+  return desks.get(key);
+}
+BASE_DOMAINS.forEach(desk);
+
+// ------------------------------------------------------------------ colour
+// Hashed from the name, so an agent keeps its colour across runs and reloads.
+function hash32(text) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return h >>> 0;
+}
+const palettes = new Map();
+function palette(name) {
+  if (palettes.has(name)) return palettes.get(name);
+  const h = hash32(name), hue = h % 360, sat = 46 + ((h >>> 9) % 24);
+  const p = {
+    body: `hsl(${hue} ${sat}% 54%)`,
+    dark: `hsl(${hue} ${sat}% 33%)`,
+    head: `hsl(${(hue + 16) % 360} ${Math.max(18, sat - 20)}% 77%)`,
+    trim: `hsl(${(hue + 165) % 360} ${sat}% 64%)`,
+  };
+  palettes.set(name, p);
+  return p;
+}
+
+// ------------------------------------------------------------------- state
+const agents = new Map();
+const dots = [];               // travelling message markers
+const human = { bubbles: [], x: DOOR.x, y: DOOR.y };
+const counters = { events: 0, msgs: 0, errs: 0 };
+const seen = new Set();        // run_id:seq — survives a reconnect replay
+let runId = '';
+let bench = { busy: false, pending: 0, known: false };
+
+function nonAgent(actor) {
+  return !actor || actor === 'system' || actor === 'bench' || actor === 'orchestrator'
+         || actor.startsWith('human');
+}
+
+function agentFor(name, domain, role) {
+  let a = agents.get(name);
+  if (a) {
+    if (domain && a.domain !== domain) { a.domain = domain; seat(a); }
+    if (role) a.role = role;
+    return a;
+  }
+  a = {
+    name, domain: domain || '', role: role || 'expert', state: 'idle', skills: [],
+    bubbles: [], reviewing: '', retired: false,
+    x: ENTRY.x, y: ENTRY.y, fx: ENTRY.x, fy: ENTRY.y, tx: ENTRY.x, ty: ENTRY.y,
+    t0: 0, t1: 0, doneUntil: 0, failUntil: 0,
+  };
+  agents.set(name, a);
+  seat(a);
+  walkTo(a, a.seat.x, a.seat.y, WALK_MS);
+  return a;
+}
+
+function seat(a) {
+  const d = desk(a.domain);
+  const slot = d.seats++;
+  a.seat = {
+    x: d.x + ((slot % 3) - 1) * 34,
+    y: d.y + 48 + Math.floor(slot / 3) * 26,
+  };
+}
+
+function walkTo(a, x, y, ms) {
+  a.fx = a.x; a.fy = a.y; a.tx = x; a.ty = y;
+  a.t0 = performance.now();
+  a.t1 = a.t0 + Math.max(1, ms);
+}
+
+function say(who, text, tone) {
+  if (!text) return;
+  who.bubbles.push({ text: String(text), tone: tone || 'say', until: performance.now() + BUBBLE_MS });
+  if (who.bubbles.length > 4) who.bubbles.shift();
+}
+
+// -------------------------------------------------------------- the stream
+function apply(ev) {
+  const key = `${ev.run_id}:${ev.seq}`;
+  if (ev.seq && seen.has(key)) return;
+  if (ev.seq) seen.add(key);
+
+  counters.events++;
+  if (ev.run_id) runId = ev.run_id;
+  const data = ev.data || {};
+  const kind = ev.kind;
+  const actor = ev.actor || 'system';
+
+  if (kind === 'message') counters.msgs++;
+  if (kind === 'error') counters.errs++;
+
+  if (kind === 'bench_state') {
+    bench = { busy: !!data.busy, pending: data.pending | 0, known: true };
+    syncBar();
+  } else if (kind === 'prompt') {
+    say(human, ev.text, 'prompt');
+  } else if (kind === 'run_queued') {
+    say(human, ev.text || `queued at ${data.position}`, 'queue');
+    setStatus(`queued at position ${data.position ?? '?'}`, 'busy');
+  } else if (!nonAgent(actor)) {
+    const a = agentFor(actor, data.domain || '', data.role || '');
+    a.retired = false;
+    switch (kind) {
+      case 'agent_spawned':
+        say(a, ev.text, 'say');
+        break;
+      case 'agent_state': {
+        const state = String(data.state || '');
+        if (state) a.state = state;
+        if (state === 'done') a.doneUntil = performance.now() + CHECK_MS;
+        if (state === 'failed') a.failUntil = performance.now() + FLASH_MS;
+        if (state === 'thinking' && ev.text) say(a, ev.text, 'think');
+        break;
+      }
+      case 'agent_retired':
+        a.retired = true; a.state = 'idle';
+        break;
+      case 'skill_activated':
+        a.skills = (data.skills || []).map((s) => (s && s.id) ? s.id : String(s));
+        break;
+      case 'thought':
+        say(a, ev.text, 'think');
+        break;
+      case 'message':
+        say(a, ev.text, 'say');
+        break;
+      case 'tool_call':
+      case 'tool_result':
+        a.state = a.state === 'failed' ? a.state : 'working';
+        say(a, ev.text, data.ok === false ? 'bad' : 'tool');
+        break;
+      case 'task_started':
+        a.state = 'working'; say(a, ev.text, 'say');
+        break;
+      case 'task_finished':
+        a.state = data.succeeded === false ? 'failed' : 'done';
+        if (a.state === 'failed') a.failUntil = performance.now() + FLASH_MS;
+        else a.doneUntil = performance.now() + CHECK_MS;
+        say(a, ev.text, data.succeeded === false ? 'bad' : 'good');
+        break;
+      case 'verdict':
+        say(a, ev.text, data.holds_up ? 'good' : 'bad');
+        break;
+      case 'error':
+        a.failUntil = performance.now() + FLASH_MS;
+        say(a, ev.text, 'bad');
+        break;
+      default:
+        if (ev.text) say(a, ev.text, 'say');
+    }
+    // The only link between a reviewer and its subject in the stream is the
+    // `target` field, so that is what makes it walk over. Nothing is inferred.
+    if (ev.target && agents.has(ev.target) && ev.target !== actor) {
+      a.reviewing = ev.target;
+      if (a.role === 'reviewer' || a.state === 'reviewing' || kind === 'verdict') {
+        const subject = agents.get(ev.target);
+        walkTo(a, subject.x + 36, subject.y + 6, 900);
+      }
+    }
+  }
+
+  if (ev.target && kind === 'message') dots.push({ from: actor, to: ev.target, t0: performance.now(), dur: 900 });
+  log(ev);
+}
+
+// ---------------------------------------------------------------- log panel
+const logEl = document.getElementById('log');
+function log(ev) {
+  const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+  const row = document.createElement('div');
+  row.className = `row k-${ev.kind}`;
+  const seq = document.createElement('span'); seq.className = 'seq'; seq.textContent = ev.seq || '';
+  const kind = document.createElement('span'); kind.className = 'kind'; kind.textContent = ev.kind;
+  const msg = document.createElement('span'); msg.className = 'msg';
+  const who = document.createElement('span'); who.className = 'who';
+  who.textContent = ev.actor + (ev.target ? ` → ${ev.target}` : '');
+  const txt = document.createElement('span'); txt.className = 'txt'; txt.textContent = ev.text || '';
+  msg.append(who, txt);
+  row.append(seq, kind, msg);
+  logEl.append(row);
+  while (logEl.childElementCount > 40) logEl.firstElementChild.remove();
+  if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+
+  document.getElementById('cEvents').textContent = counters.events;
+  document.getElementById('cMsgs').textContent = counters.msgs;
+  document.getElementById('cErrs').textContent = counters.errs;
+  document.getElementById('cAgents').textContent = agents.size;
+  document.getElementById('runid').textContent = runId || '—';
+  if (counters.events) document.getElementById('empty').classList.add('gone');
+}
+
+// ------------------------------------------------------------------ canvas
+const canvas = document.getElementById('world');
+const ctx = canvas.getContext('2d');
+let view = { scale: 1, ox: 0, oy: 0 };
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const box = canvas.parentElement.getBoundingClientRect();
+  const w = Math.max(1, Math.floor(box.width)), h = Math.max(1, Math.floor(box.height));
+  canvas.width = Math.floor(w * dpr);
+  canvas.height = Math.floor(h * dpr);
+  const scale = Math.min(w / WORLD.w, h / WORLD.h);
+  view = { scale, ox: (w - WORLD.w * scale) / 2, oy: (h - WORLD.h * scale) / 2, dpr };
+}
+new ResizeObserver(resize).observe(canvas.parentElement);
+window.addEventListener('resize', resize);
+
+function fitText(text, maxWidth) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let lo = 0, hi = text.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ctx.measureText(text.slice(0, mid) + '…').width <= maxWidth) lo = mid; else hi = mid - 1;
+  }
+  return text.slice(0, lo) + '…';
+}
+
+function wrapText(text, maxWidth, maxLines) {
+  const words = String(text ?? '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+  const lines = [];
+  let line = '';
+  for (let word of words) {
+    while (ctx.measureText(word).width > maxWidth && word.length > 1) {
+      let n = 1;
+      while (n < word.length && ctx.measureText(word.slice(0, n + 1)).width <= maxWidth) n++;
+      if (line) { lines.push(line); line = ''; }
+      lines.push(word.slice(0, n));
+      word = word.slice(n);
+      if (lines.length > maxLines) break;
+    }
+    const probe = line ? line + ' ' + word : word;
+    if (ctx.measureText(probe).width <= maxWidth) line = probe;
+    else { if (line) lines.push(line); line = word; }
+    if (lines.length > maxLines) break;
+  }
+  if (line) lines.push(line);
+  if (lines.length > maxLines) {
+    const kept = lines.slice(0, maxLines);
+    kept[maxLines - 1] = fitText(kept[maxLines - 1] + '…', maxWidth);
+    return kept;
+  }
+  return lines;
+}
+
+function box(x, y, w, h, r) {
+  ctx.beginPath();
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+function drawFloor() {
+  const tile = 40;
+  for (let y = 0; y < WORLD.h; y += tile) {
+    for (let x = 0; x < WORLD.w; x += tile) {
+      ctx.fillStyle = ((x / tile + y / tile) & 1) ? '#1b2433' : '#182031';
+      ctx.fillRect(x, y, tile, tile);
+    }
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,.025)';
+  ctx.lineWidth = 1;
+  for (let x = 0; x <= WORLD.w; x += tile) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WORLD.h); ctx.stroke(); }
+  for (let y = 0; y <= WORLD.h; y += tile) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WORLD.w, y); ctx.stroke(); }
+
+  // left wall with the door the agents come in through
+  ctx.fillStyle = '#0f1622';
+  ctx.fillRect(0, 0, 26, WORLD.h);
+  ctx.fillStyle = '#243043';
+  ctx.fillRect(0, DOOR.y - 48, 26, 96);
+  ctx.fillStyle = '#3c5070';
+  ctx.fillRect(4, DOOR.y - 42, 18, 84);
+  ctx.fillStyle = '#8fb6ff';
+  ctx.fillRect(17, DOOR.y - 2, 3, 6);
+  ctx.fillStyle = '#5d6f8a';
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('door', 32, DOOR.y - 54);
+}
+
+function drawDesk(d, now) {
+  const x = d.x, y = d.y;
+  ctx.fillStyle = 'rgba(0,0,0,.28)';
+  box(x - 68, y - 20, 136, 50, 5); ctx.fill();
+  ctx.fillStyle = '#2b3546';
+  box(x - 66, y - 23, 132, 46, 5); ctx.fill();
+  ctx.strokeStyle = '#3d4a60'; ctx.lineWidth = 1; ctx.stroke();
+
+  // monitor + keyboard, so a desk reads as a workstation at a glance
+  ctx.fillStyle = '#0d141f'; ctx.fillRect(x - 21, y - 16, 42, 24);
+  const active = liveAt(d.name);
+  ctx.fillStyle = active ? '#123a44' : '#131c28';
+  ctx.fillRect(x - 18, y - 13, 36, 18);
+  if (active) {
+    ctx.fillStyle = 'rgba(82,208,200,.55)';
+    for (let i = 0; i < 3; i++) {
+      const w = 8 + 16 * Math.abs(Math.sin(now / 620 + i * 1.3 + d.x));
+      ctx.fillRect(x - 16, y - 10 + i * 5, w, 2);
+    }
+  }
+  ctx.fillStyle = '#3a465a'; ctx.fillRect(x - 16, y + 11, 32, 7);
+
+  ctx.fillStyle = active ? '#a9bdd6' : '#63748d';
+  ctx.font = '11px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(fitText(d.name, 150), x, y - 30);
+}
+
+function liveAt(domain) {
+  for (const a of agents.values()) {
+    if ((a.domain || 'floor') === domain && !a.retired && a.state !== 'idle') return true;
+  }
+  return false;
+}
+
+function drawWorkMarks(a, now) {
+  // Small animated activity at the desk while an agent is working.
+  const x = a.x, y = a.y - 46;
+  ctx.fillStyle = 'rgba(240,180,41,.85)';
+  for (let i = 0; i < 4; i++) {
+    const h = 3 + 5 * Math.abs(Math.sin(now / 150 + i * 0.9));
+    ctx.fillRect(x - 14 + i * 8, y - h, 4, h);
+  }
+}
+
+function drawSprite(a, now) {
+  const p = palette(a.name);
+  const walking = now < a.t1;
+  const frame = Math.floor(now / 140) % 2;
+  const bob = walking ? (frame ? -1.5 : 0.5) : (Math.floor(now / 520) % 2 ? -0.5 : 0);
+  const x = Math.round(a.x), y = Math.round(a.y);
+
+  ctx.globalAlpha = a.retired ? 0.4 : 1;
+
+  ctx.fillStyle = 'rgba(0,0,0,.35)';
+  ctx.beginPath(); ctx.ellipse(x, y + 1, 11, 4, 0, 0, Math.PI * 2); ctx.fill();
+
+  // legs — the second frame of the walk
+  ctx.fillStyle = p.dark;
+  if (walking && frame) { ctx.fillRect(x - 7, y - 5, 5, 5); ctx.fillRect(x + 3, y - 6, 5, 6); }
+  else { ctx.fillRect(x - 6, y - 5, 5, 5); ctx.fillRect(x + 1, y - 5, 5, 5); }
+
+  ctx.save();
+  ctx.translate(0, bob);
+  ctx.fillStyle = p.body; ctx.fillRect(x - 9, y - 22, 18, 17);
+  ctx.fillStyle = p.dark; ctx.fillRect(x - 9, y - 11, 18, 3);
+  ctx.fillStyle = p.head; ctx.fillRect(x - 6, y - 33, 12, 11);
+  ctx.fillStyle = '#10161f'; ctx.fillRect(x - 4, y - 29, 2, 2); ctx.fillRect(x + 2, y - 29, 2, 2);
+
+  if (a.role === 'reviewer') {           // clipboard
+    ctx.fillStyle = '#e8eef7'; ctx.fillRect(x + 8, y - 20, 8, 10);
+    ctx.fillStyle = '#8a9ab2'; ctx.fillRect(x + 9, y - 18, 6, 1); ctx.fillRect(x + 9, y - 15, 6, 1);
+  } else if (a.role === 'orchestrator') { // hard hat
+    ctx.fillStyle = p.trim; ctx.fillRect(x - 8, y - 36, 16, 4); ctx.fillRect(x - 5, y - 39, 10, 3);
+  }
+  ctx.restore();
+
+  if (now < a.failUntil) {               // failure: a red flash over the sprite
+    ctx.globalAlpha = 0.25 + 0.35 * Math.abs(Math.sin(now / 90));
+    ctx.fillStyle = '#ef5f5f';
+    ctx.fillRect(x - 10, y - 34, 20, 34);
+    ctx.globalAlpha = a.retired ? 0.4 : 1;
+  }
+  if (now < a.doneUntil) {               // success: a brief check mark
+    ctx.strokeStyle = '#6fd47e'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x + 7, y - 40); ctx.lineTo(x + 11, y - 36); ctx.lineTo(x + 18, y - 45);
+    ctx.stroke();
+  }
+  if (a.state === 'working' && !walking) drawWorkMarks(a, now);
+
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = a.retired ? '#5a687f' : '#c3d2e6';
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(fitText(a.name, 130), x, y + 14);
+}
+
+const TONES = {
+  say:    { bg: '#f2f6fb', fg: '#121a26' },
+  think:  { bg: '#dfe6f5', fg: '#232f42' },
+  tool:   { bg: '#dcefe9', fg: '#12332c' },
+  good:   { bg: '#d8f3dd', fg: '#12351d' },
+  bad:    { bg: '#ffd9d9', fg: '#4a1212' },
+  prompt: { bg: '#efd9ff', fg: '#2b1140' },
+  queue:  { bg: '#ffeec2', fg: '#3b2a05' },
+};
+
+function drawBubble(x, y, text, tone, now) {
+  const style = TONES[tone] || TONES.say;
+  ctx.font = '11px ui-monospace, monospace';
+  const maxW = 190;
+  const lines = wrapText(text, maxW, 3);
+  if (!lines.length) return;
+  let w = 0;
+  for (const line of lines) w = Math.max(w, ctx.measureText(line).width);
+  w = Math.min(maxW, w) + 14;
+  const h = lines.length * 14 + 10;
+  const bx = x - w / 2, by = y - h - 8 + Math.sin(now / 380) * 1.5;
+
+  ctx.fillStyle = 'rgba(0,0,0,.35)';
+  box(bx + 1, by + 2, w, h, 5); ctx.fill();
+  ctx.fillStyle = style.bg;
+  box(bx, by, w, h, 5); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x - 5, by + h); ctx.lineTo(x, by + h + 7); ctx.lineTo(x + 5, by + h);
+  ctx.closePath(); ctx.fill();
+
+  ctx.fillStyle = style.fg;
+  ctx.textAlign = 'center';
+  lines.forEach((line, i) => ctx.fillText(line, x, by + 18 + i * 14));
+}
+
+function drawSkillCard(a) {
+  if (!a.skills.length || a.retired) return;
+  const d = desk(a.domain);
+  const rows = a.skills.slice(0, 3);
+  const extra = a.skills.length - rows.length;
+  const h = 14 + rows.length * 11 + (extra ? 11 : 0);
+  const x = d.x - 66, y = d.y + 66;
+  ctx.fillStyle = 'rgba(10,16,24,.86)';
+  box(x, y, 132, h, 4); ctx.fill();
+  ctx.strokeStyle = '#33465e'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.font = '9px ui-monospace, monospace';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#52d0c8';
+  ctx.fillText('skills', x + 6, y + 10);
+  ctx.fillStyle = '#b9c8de';
+  rows.forEach((id, i) => ctx.fillText(fitText(id, 120), x + 6, y + 21 + i * 11));
+  if (extra) {
+    ctx.fillStyle = '#6b7c94';
+    ctx.fillText(`+${extra} more`, x + 6, y + 21 + rows.length * 11);
+  }
+}
+
+function drawHuman(now) {
+  const x = human.x, y = human.y;
+  ctx.fillStyle = 'rgba(0,0,0,.35)';
+  ctx.beginPath(); ctx.ellipse(x, y + 1, 11, 4, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#3b3550'; ctx.fillRect(x - 6, y - 5, 5, 5); ctx.fillRect(x + 1, y - 5, 5, 5);
+  ctx.fillStyle = '#7a5cc4'; ctx.fillRect(x - 9, y - 22, 18, 17);
+  ctx.fillStyle = '#5a3fa0'; ctx.fillRect(x - 9, y - 11, 18, 3);
+  ctx.fillStyle = '#f0d5b8'; ctx.fillRect(x - 6, y - 33, 12, 11);
+  ctx.fillStyle = '#2a1f14'; ctx.fillRect(x - 6, y - 34, 12, 4);
+  ctx.fillStyle = '#10161f'; ctx.fillRect(x - 4, y - 29, 2, 2); ctx.fillRect(x + 2, y - 29, 2, 2);
+  ctx.fillStyle = '#c9b6f0';
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('you', x, y + 14);
+  const b = human.bubbles[human.bubbles.length - 1];
+  if (b && now < b.until) drawBubble(x, y - 38, b.text, b.tone, now);
+}
+
+function posOf(name) {
+  if (!name || name.startsWith('human')) return { x: human.x, y: human.y - 20 };
+  const a = agents.get(name);
+  return a ? { x: a.x, y: a.y - 20 } : null;
+}
+
+function drawDots(now) {
+  for (let i = dots.length - 1; i >= 0; i--) {
+    const d = dots[i];
+    const p = (now - d.t0) / d.dur;
+    if (p >= 1) { dots.splice(i, 1); continue; }
+    const from = posOf(d.from), to = posOf(d.to);
+    if (!from || !to) { dots.splice(i, 1); continue; }
+    ctx.strokeStyle = 'rgba(82,208,200,.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke();
+    const x = from.x + (to.x - from.x) * p;
+    const y = from.y + (to.y - from.y) * p - Math.sin(p * Math.PI) * 18;
+    ctx.fillStyle = '#52d0c8';
+    ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
+    // arrow head at the destination
+    ctx.fillStyle = 'rgba(82,208,200,.5)';
+    const ang = Math.atan2(to.y - from.y, to.x - from.x);
+    ctx.save(); ctx.translate(to.x, to.y); ctx.rotate(ang);
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-9, -4); ctx.lineTo(-9, 4); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+}
+
+function ease(p) { return p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2; }
+
+function frame(now) {
+  resizeIfNeeded();
+  const dpr = view.dpr || 1;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(dpr * view.scale, 0, 0, dpr * view.scale, dpr * view.ox, dpr * view.oy);
+
+  drawFloor();
+  for (const d of desks.values()) drawDesk(d, now);
+
+  for (const a of agents.values()) {
+    if (now < a.t1) {
+      const p = ease(Math.max(0, Math.min(1, (now - a.t0) / (a.t1 - a.t0))));
+      a.x = a.fx + (a.tx - a.fx) * p;
+      a.y = a.fy + (a.ty - a.fy) * p;
+    } else { a.x = a.tx; a.y = a.ty; }
+    drawSkillCard(a);
+  }
+
+  const ordered = [...agents.values()].sort((l, r) => l.y - r.y);
+  for (const a of ordered) drawSprite(a, now);
+  drawHuman(now);
+  drawDots(now);
+
+  // bubbles last, so they are never hidden behind a sprite
+  for (const a of ordered) {
+    while (a.bubbles.length && now > a.bubbles[0].until) a.bubbles.shift();
+    const b = a.bubbles[a.bubbles.length - 1];
+    if (b) drawBubble(a.x, a.y - 38, b.text, b.tone, now);
+    else if (a.state === 'thinking' && !a.retired) drawBubble(a.x, a.y - 38, '. . .', 'think', now);
+    else if (a.state === 'waiting' && !a.retired) drawBubble(a.x, a.y - 38, '?', 'think', now);
+  }
+  requestAnimationFrame(frame);
+}
+
+let lastW = 0, lastH = 0, lastWorldH = 0;
+function resizeIfNeeded() {
+  const box = canvas.parentElement.getBoundingClientRect();
+  if (Math.floor(box.width) !== lastW || Math.floor(box.height) !== lastH || WORLD.h !== lastWorldH) {
+    lastW = Math.floor(box.width); lastH = Math.floor(box.height); lastWorldH = WORLD.h;
+    resize();
+  }
+}
+resize();
+requestAnimationFrame(frame);
+
+// ------------------------------------------------------------- prompt bar
+const input = document.getElementById('prompt');
+const sendBtn = document.getElementById('send');
+const statusEl = document.getElementById('status');
+const expertList = document.getElementById('expertList');
+const expertsLabel = document.getElementById('expertsLabel');
+const promptHistory = [];
+let historyIndex = -1;
+
+function setStatus(text, cls) {
+  statusEl.textContent = text;
+  statusEl.className = cls || '';
+}
+
+function syncBar() {
+  const busy = bench.known && bench.busy;
+  input.disabled = busy;
+  sendBtn.disabled = busy || !input.value.trim();
+  if (busy) setStatus(`bench busy — ${bench.pending} queued`, 'busy');
+  else if (bench.known) setStatus(`bench ready${bench.pending ? ` — ${bench.pending} queued` : ''}`, 'ok');
+}
+
+input.addEventListener('input', () => {
+  input.style.height = 'auto';
+  input.style.height = Math.min(96, input.scrollHeight) + 'px';
+  sendBtn.disabled = (bench.known && bench.busy) || !input.value.trim();
+});
+
+input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); return; }
+  const before = input.value.slice(0, input.selectionStart);
+  const after = input.value.slice(input.selectionEnd);
+  if (e.key === 'ArrowUp' && !before.includes('\n') && promptHistory.length) {
+    e.preventDefault();
+    historyIndex = Math.min(historyIndex + 1, promptHistory.length - 1);
+    input.value = promptHistory[historyIndex];
+    input.dispatchEvent(new Event('input'));
+  } else if (e.key === 'ArrowDown' && !after.includes('\n') && historyIndex >= 0) {
+    e.preventDefault();
+    historyIndex--;
+    input.value = historyIndex >= 0 ? promptHistory[historyIndex] : '';
+    input.dispatchEvent(new Event('input'));
+  }
+});
+
+sendBtn.addEventListener('click', send);
+
+function chosenExperts() {
+  return [...expertList.querySelectorAll('input:checked')].map((el) => el.value);
+}
+
+async function send() {
+  const text = input.value.trim();
+  if (!text) return;
+  promptHistory.unshift(text);
+  while (promptHistory.length > 20) promptHistory.pop();
+  historyIndex = -1;
+  input.value = '';
+  input.dispatchEvent(new Event('input'));
+  setStatus('sending…', '');
+  try {
+    const res = await fetch('/api/prompt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: text, experts: chosenExperts() }),
+    });
+    let body = {};
+    try { body = await res.json(); } catch (_) { /* non-JSON error page */ }
+    if (res.ok) setStatus(`accepted — ${body.command_id || ''}`, 'ok');
+    else setStatus(body.error || `HTTP ${res.status}`, 'bad');
+  } catch (err) {
+    setStatus(`could not reach the server: ${err}`, 'bad');
+  }
+}
+
+fetch('/api/roster').then((r) => r.json()).then((roster) => {
+  for (const spec of roster) {
+    const label = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = spec.name;
+    cb.addEventListener('change', () => {
+      const n = chosenExperts().length;
+      expertsLabel.textContent = n ? `experts: ${n} pinned` : 'experts: auto';
+    });
+    const dom = document.createElement('span');
+    dom.className = 'dom'; dom.textContent = ` ${spec.domain}`;
+    label.append(cb, document.createTextNode(' ' + spec.name), dom);
+    label.title = spec.charter || '';
+    expertList.append(label);
+    // Give every rostered domain a desk up front, so the workshop is fully
+    // furnished before anyone walks in.
+    desk(spec.domain);
+  }
+}).catch(() => { expertsLabel.textContent = 'experts: unavailable'; });
+
+// --------------------------------------------------------------- websocket
+const dotEl = document.getElementById('dot');
+const linkText = document.getElementById('linkText');
+let socket = null, backoff = 500;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  socket = new WebSocket(`${proto}://${location.host}/ws`);
+  socket.onopen = () => {
+    backoff = 500;
+    dotEl.classList.add('on');
+    linkText.textContent = 'live';
+    if (!bench.known) setStatus('connected', '');
+  };
+  socket.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch (_) { return; }
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.kind === 'ack') {           // reply to a prompt we sent over the socket
+      setStatus(msg.ok ? `accepted — ${msg.command_id}` : (msg.error || 'rejected'), msg.ok ? 'ok' : 'bad');
+      return;
+    }
+    apply(msg);
+  };
+  socket.onclose = () => {
+    dotEl.classList.remove('on');
+    linkText.textContent = 'reconnecting…';
+    setTimeout(connect, backoff);
+    backoff = Math.min(5000, backoff * 2);
+  };
+  socket.onerror = () => { try { socket.close(); } catch (_) { /* already gone */ } };
+}
+
+// The socket replays history on connect; this is only so a broken socket still
+// shows the run. Duplicates are dropped by seq.
+fetch('/api/history').then((r) => r.json()).then((list) => list.forEach(apply)).catch(() => {});
+connect();
+syncBar();
+})();
+</script>
+</body>
+</html>

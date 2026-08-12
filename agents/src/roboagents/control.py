@@ -28,8 +28,9 @@ import threading
 import time
 import traceback
 import uuid
+from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict, dataclass, field
-from typing import Any, AsyncIterator, Callable
+from typing import Any
 
 from .events import EventBus, Kind, bus
 

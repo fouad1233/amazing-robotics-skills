@@ -1,0 +1,65 @@
+amazing-robotics-skills
+Copyright (c) 2026 Fouad Aladhami / GTU DASH Lab
+
+This repository is a curated catalogue of agent skills for robotics work.
+The packaging, catalogue, scripts and documentation in this repository are
+licensed under the Apache License 2.0 (see LICENSE).
+
+================================================================================
+THIRD-PARTY CONTENT
+================================================================================
+
+Skill files under skills/ are unmodified copies of work authored by NVIDIA
+Corporation and its affiliates, redistributed under the terms of their
+respective upstream licences. Each vendored file carries a header comment
+recording its source repository, commit ref, path and licence.
+
+No skill file in this repository has been modified from its upstream form
+other than the addition of that provenance header.
+
+Vendored sources and their licences:
+
+  isaac-sim/IsaacSim                       Apache-2.0
+  isaac-sim/IsaacLab                       BSD-3-Clause
+  isaac-sim/IsaacAutomator                 Apache-2.0
+  newton-physics/newton                    Apache-2.0
+  NVIDIA-Omniverse/PhysX                   BSD-3-Clause
+  NVIDIA/TensorRT                          Apache-2.0
+  NVIDIA/TensorRT-LLM                      Apache-2.0
+  NVIDIA/Megatron-LM                       BSD-3-Clause
+  NVIDIA/NemoClaw                          Apache-2.0
+  NVIDIA/cudf                              Apache-2.0
+  NVIDIA-AI-IOT/jetson-device-skills       CC-BY-4.0 (docs) / Apache-2.0 (code)
+  NVIDIA-AI-IOT/jetson-bsp-skills          CC-BY-4.0 (docs) / Apache-2.0 (code)
+  NVIDIA-AI-IOT/jetson-ai-lab              MIT
+  NVIDIA-AI-IOT/DeepStream_Coding_Agent    CC-BY-4.0 (docs) / Apache-2.0 (code)
+  NVIDIA-AI-IOT/inference_builder          Apache-2.0
+
+================================================================================
+DELIBERATELY NOT REDISTRIBUTED
+================================================================================
+
+The following upstream skills are catalogued but NOT copied into this
+repository, because their licences do not permit redistribution. They are
+fetched directly from their source repositories at install time by
+scripts/install.py, so any copy you obtain comes to you from NVIDIA under
+your own licence to use that software.
+
+  NVIDIA-Omniverse/ovrtx
+      NVIDIA Software License Agreement (proprietary). Section 2 clause 5
+      expressly forbids distribution "in any publicly accessible software
+      repositories", and section 8.1 states no licence is granted by
+      implication or estoppel. Attribution does not create a redistribution
+      right where none was granted.
+
+  newton-physics/newton-asv
+      No LICENSE file present. Under default copyright, all rights are
+      reserved and no redistribution permission exists.
+
+================================================================================
+
+NVIDIA, Isaac Sim, Isaac Lab, Omniverse, Jetson, TensorRT and Newton are
+trademarks of NVIDIA Corporation. This project is not affiliated with,
+sponsored by, or endorsed by NVIDIA Corporation.
+
+To report a licensing concern, open an issue on this repository.

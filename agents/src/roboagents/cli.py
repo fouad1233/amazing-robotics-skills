@@ -508,23 +508,26 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 async def _run_async(args: argparse.Namespace, experts: list[str], term: _Term) -> int:
+    if args.dry_run:
+        # Deliberately before the bus is touched: constructing an EventBus opens
+        # a transcript file, and a dry run that emits nothing should not leave an
+        # empty one behind for `latest_run()` to find.
+        return await _dry_run(args, experts, term)
+
     from .events import bus
 
     bus().bind_loop()
+    orchestrator = _make_orchestrator(args, experts, term)
 
-    if args.dry_run:
-        return await _dry_run(args, experts, term)
+    # Resolve the views before the run is scheduled. A missing tui/web module
+    # must fail while there is nothing in flight, not leave an orphaned run.
+    views = [asyncio.create_task(start()) for start in _view_starters(args, term)]
+    # `experts` is pinned on the constructor, not on run(): the orchestrator
+    # skips routing entirely when it has a pinned roster subset.
+    run_task = asyncio.create_task(orchestrator.run(args.request))
 
-    orchestrator_cls = _load("orchestrator", "Orchestrator")
-    orchestrator = orchestrator_cls(**_orchestrator_kwargs(orchestrator_cls, args, experts, term))
-
-    run_kwargs = _supported(orchestrator.run, {"experts": experts or None}, term)
-    run_task = asyncio.create_task(orchestrator.run(args.request, **run_kwargs))
-
-    views = [task for task in (_tui_task(args, term), _web_task(args, term)) if task is not None]
     if not views:
-        result = await run_task
-        return _report(result, args, term)
+        return _report(await run_task, orchestrator, args, term)
 
     done, pending = await asyncio.wait({run_task, *views}, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
@@ -537,24 +540,36 @@ async def _run_async(args: argparse.Namespace, experts: list[str], term: _Term) 
             # A view that died first took the run down with it; surface why.
             with contextlib.suppress(asyncio.CancelledError):
                 task.result()
-    return _report(await run_task, args, term)
+    return _report(await run_task, orchestrator, args, term)
 
 
 async def _dry_run(args: argparse.Namespace, experts: list[str], term: _Term) -> int:
     """Print the route without executing anything."""
+    from .llm import OllamaUnavailable
     from .types import Assignment, RoutePlan
 
-    if experts:
-        plan: Any = RoutePlan(
-            rationale="Experts pinned with --experts; routing skipped.",
+    orchestrator: Any = None
+    try:
+        orchestrator = _make_orchestrator(args, experts, term)
+    except OllamaUnavailable as exc:
+        # Routing is an LLM call and cannot be faked. Pinned experts are not:
+        # checking what `--experts A,B` means is exactly the thing you want to
+        # be able to do on a machine with no model running.
+        if not experts:
+            term.error(f"routing needs a model. {exc}")
+            return 1
+        term.warn(f"no model resolved ({exc}); pinned routing needs none, continuing")
+
+    if experts and orchestrator is not None:
+        plan: Any = orchestrator.pinned_plan(args.request)
+    elif experts:
+        # Same shape Orchestrator.pinned_plan produces, built without one.
+        plan = RoutePlan(
+            rationale=f"experts pinned on the command line: {', '.join(experts)}",
             assignments=[Assignment(expert=name, task=args.request) for name in experts],
-            parallel=args.parallel > 1,
+            parallel=True,
         )
     else:
-        orchestrator_cls = _load("orchestrator", "Orchestrator")
-        orchestrator = orchestrator_cls(
-            **_orchestrator_kwargs(orchestrator_cls, args, experts, term)
-        )
         plan = await orchestrator.route(args.request)
 
     if args.json:
@@ -583,13 +598,27 @@ async def _dry_run(args: argparse.Namespace, experts: list[str], term: _Term) ->
     return 0
 
 
-def _report(result: Any, args: argparse.Namespace, term: _Term) -> int:
+def _report(report: Any, orchestrator: Any, args: argparse.Namespace, term: _Term) -> int:
+    """Print a RunReport and turn it into an exit code.
+
+    Non-zero unless every assignment came back verified. "The model said it
+    worked" is not success here — a reviewer has to have checked the evidence,
+    which is the same rule ``report_text`` prints under.
+    """
     if args.json:
-        print(json.dumps(_jsonable(result), indent=2))
+        print(json.dumps(_jsonable(report), indent=2))
     else:
-        term.print(str(result))
-    succeeded = getattr(result, "succeeded", None)
-    return 0 if succeeded is not False else 1
+        term.print(orchestrator.report_text(report))
+        # report_text already names the transcript; this is the thing to do
+        # with it, which it has no reason to know about.
+        transcript = getattr(report, "transcript", "")
+        if transcript:
+            term.print(f"replay it:  roboagents tui --run {transcript}")
+
+    results = getattr(report, "results", None)
+    if not results:
+        return 1
+    return 0 if not getattr(report, "unverified", 0) else 1
 
 
 def _pinned_experts(raw: str | None) -> list[str]:
@@ -601,21 +630,18 @@ def _pinned_experts(raw: str | None) -> list[str]:
     return [roster.get(name.strip()).__name__ for name in raw.split(",") if name.strip()]
 
 
-def _orchestrator_kwargs(
-    target: Callable[..., Any],
-    args: argparse.Namespace,
-    experts: list[str],
-    term: _Term,
-) -> dict[str, Any]:
+def _make_orchestrator(args: argparse.Namespace, experts: list[str], term: _Term) -> Any:
+    """Build the orchestrator with the policy the command line asked for."""
     from .config import Policy
 
+    orchestrator_cls = _load("orchestrator", "Orchestrator")
     policy = dataclasses.replace(
         Policy.default(),
         allow_push=bool(args.allow_push),
-        max_parallel_agents=int(args.parallel),
+        max_parallel_agents=max(1, int(args.parallel)),
     )
-    return _supported(
-        target,
+    kwargs = _supported(
+        orchestrator_cls,
         {
             "policy": policy,
             "workdir": Path(args.workdir).expanduser() if args.workdir else None,
@@ -624,23 +650,31 @@ def _orchestrator_kwargs(
         },
         term,
     )
+    return orchestrator_cls(**kwargs)
 
 
-def _tui_task(args: argparse.Namespace, term: _Term) -> asyncio.Task[Any] | None:
-    if not getattr(args, "tui", False):
-        return None
-    run_tui = _load("tui", "run_tui")
-    kwargs = _supported(run_tui, {"path": None, "follow": True}, term)
-    return asyncio.create_task(run_tui(**kwargs))
+def _view_starters(args: argparse.Namespace, term: _Term) -> list[Callable[[], Any]]:
+    """Entry points for the views ``run`` was asked to show alongside the run.
 
+    Every one is imported and its arguments checked here, so ``--tui`` on a
+    build without a TUI fails immediately rather than half-way through a run.
+    """
+    starters: list[Callable[[], Any]] = []
 
-def _web_task(args: argparse.Namespace, term: _Term) -> asyncio.Task[Any] | None:
-    if not getattr(args, "web", False):
-        return None
-    serve = _load("web", "serve")
-    kwargs = _supported(serve, {"host": _DEFAULT_HOST, "port": _DEFAULT_PORT, "path": None}, term)
-    term.print(f"web world on http://{_DEFAULT_HOST}:{_DEFAULT_PORT}", style="cyan")
-    return asyncio.create_task(serve(**kwargs))
+    if args.tui:
+        run_tui = _load("tui", "run_tui")
+        tui_kwargs = _supported(run_tui, {"path": None, "follow": True}, term)
+        starters.append(lambda: run_tui(**tui_kwargs))
+
+    if args.web:
+        serve = _load("web", "serve")
+        web_kwargs = _supported(
+            serve, {"host": _DEFAULT_HOST, "port": _DEFAULT_PORT, "path": None}, term
+        )
+        term.print(f"web world on http://{_DEFAULT_HOST}:{_DEFAULT_PORT}", style="cyan")
+        starters.append(lambda: serve(**web_kwargs))
+
+    return starters
 
 
 # --------------------------------------------------------------------------
@@ -650,23 +684,21 @@ def _web_task(args: argparse.Namespace, term: _Term) -> asyncio.Task[Any] | None
 
 def cmd_watch(args: argparse.Namespace) -> int:
     term = _Term()
-    try:
-        orchestrator_cls = _load("orchestrator", "Orchestrator")
-    except _NotBuiltYet as exc:
-        term.error(str(exc))
+    sources = list(args.tail or [])
+    if not sources:
+        term.error("nothing to watch. Give at least one --tail.")
+        term.print("A source is a file to follow if it exists, otherwise a shell command:")
+        term.print("    roboagents watch --tail ~/setup-progress.log --tail 'dmesg -w'")
         return 2
 
     async def go() -> Any:
         from .events import bus
 
         bus().bind_loop()
-        orchestrator = orchestrator_cls()
-        kwargs = _supported(
-            orchestrator.watch,
-            {"tails": [Path(p).expanduser() for p in args.tail or []], "interval": args.interval},
-            term,
-        )
-        return await orchestrator.watch(**kwargs)
+        # Sources stay strings: watch() treats one as a file if it exists on
+        # disk and as a shell command to monitor otherwise.
+        orchestrator = _make_orchestrator(args, [], term)
+        return await orchestrator.watch(sources, interval=args.interval)
 
     return _drive(go(), term)
 
@@ -848,6 +880,20 @@ def _drive(coro: Any, term: _Term) -> int:
 # --------------------------------------------------------------------------
 
 
+def _add_policy_flags(parser: argparse.ArgumentParser) -> None:
+    """Flags every subcommand that builds an Orchestrator shares."""
+    parser.add_argument("--workdir", metavar="P", help="where the agents work (default ~/robotics)")
+    parser.add_argument("--repo", metavar="P", help="git repository the agents may commit to")
+    parser.add_argument(
+        "--allow-push",
+        action="store_true",
+        help="permit `git push`. Off by default; commits to a protected branch stay refused.",
+    )
+    parser.add_argument(
+        "--parallel", type=int, default=4, metavar="N", help="max concurrent experts"
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="roboagents",
@@ -877,10 +923,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run", help="route a request across the roster and execute it")
     run.add_argument("request", help="what you want done, in plain language")
     run.add_argument("--experts", metavar="A,B", help="pin these experts and skip routing")
-    run.add_argument("--workdir", metavar="P", help="where the agents work (default ~/robotics)")
-    run.add_argument("--repo", metavar="P", help="git repository the agents may commit to")
-    run.add_argument("--allow-push", action="store_true", help="permit `git push` (off by default)")
-    run.add_argument("--parallel", type=int, default=4, metavar="N", help="max concurrent experts")
+    _add_policy_flags(run)
     run.add_argument("--json", action="store_true")
     run.add_argument("--dry-run", action="store_true", help="print the route and stop")
     run.add_argument("--tui", action="store_true", help="show the terminal view during the run")
@@ -888,8 +931,20 @@ def build_parser() -> argparse.ArgumentParser:
     run.set_defaults(handler=cmd_run)
 
     watch = subparsers.add_parser("watch", help="reactive loop over files and job output")
-    watch.add_argument("--tail", action="append", metavar="PATH", help="repeatable")
-    watch.add_argument("--interval", type=float, default=2.0, metavar="S")
+    watch.add_argument(
+        "--tail",
+        action="append",
+        metavar="PATH",
+        help="file to follow, or a shell command to monitor. Repeatable.",
+    )
+    watch.add_argument(
+        "--interval",
+        type=float,
+        default=300.0,
+        metavar="S",
+        help="seconds between heartbeats; output is batched, not acted on per line",
+    )
+    _add_policy_flags(watch)
     watch.set_defaults(handler=cmd_watch)
 
     tui = subparsers.add_parser("tui", help="terminal view of the event stream")

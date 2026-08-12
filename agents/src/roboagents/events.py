@@ -47,6 +47,13 @@ class Kind(StrEnum):
     RUN_FINISHED = "run_finished"
     ROUTE_DECIDED = "route_decided"
 
+    #: A human typed something into one of the views.
+    PROMPT = "prompt"
+    #: Accepted but not started — a local model serves one run at a time.
+    RUN_QUEUED = "run_queued"
+    #: Whether the bench is free to accept work; drives the input box state.
+    BENCH_STATE = "bench_state"
+
     AGENT_SPAWNED = "agent_spawned"
     AGENT_STATE = "agent_state"
     AGENT_RETIRED = "agent_retired"

@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 .DS_Store
 .sync-cache/
+
+# roboagents
+agents/.venv/
+agents/**/__pycache__/
+.pytest_cache/

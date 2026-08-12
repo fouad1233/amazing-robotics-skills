@@ -178,6 +178,7 @@ class RoboAgent(Agent):
         you expect to be true; "I could not determine X" is a valid finding and
         far more useful than a confident guess.
         """
+        ...
 
     async def plan_work(self, task: str) -> Plan:
         """Turn a task into concrete, verifiable steps.
@@ -188,6 +189,7 @@ class RoboAgent(Agent):
         access, a reboot, credentials, or a choice with more than one defensible
         answer — do not guess past those.
         """
+        ...
 
     async def execute(self, task: str) -> WorkResult:
         """Do the task, then prove it.
@@ -199,6 +201,7 @@ class RoboAgent(Agent):
         and report the actual error; a truthful failure is worth more than an
         optimistic summary.
         """
+        ...
 
     # -- description for the router --------------------------------------
 

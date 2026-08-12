@@ -609,6 +609,74 @@ async def _dry_run(args: argparse.Namespace, experts: list[str], term: _Term) ->
     return 0
 
 
+def cmd_chat(args: argparse.Namespace) -> int:
+    """A plain terminal REPL — no dashboard, no browser, just questions and answers.
+
+    Where ``run`` is one request and exit, this is a conversation: the same
+    Orchestrator stays live across turns, so nothing is re-resolved between
+    questions. Each turn blocks until that request's experts have run and been
+    reviewed, which is the same "verified vs. unverified" contract as ``run`` —
+    a chat reply here is never a guess dressed up as an answer.
+    """
+    term = _Term()
+    try:
+        experts = _pinned_experts(args.experts)
+    except KeyError as exc:
+        term.error(str(exc.args[0]) if exc.args else str(exc))
+        return 2
+    try:
+        return asyncio.run(_chat_async(args, experts, term))
+    except _NotBuiltYet as exc:
+        term.error(str(exc))
+        return 2
+
+
+async def _chat_async(args: argparse.Namespace, experts: list[str], term: _Term) -> int:
+    from .events import bus
+
+    bus().bind_loop()
+    orchestrator = _make_orchestrator(args, experts, term)
+
+    workdir = getattr(orchestrator, "workdir", None)
+    term.print("roboagents chat", style="bold cyan")
+    if workdir:
+        term.print(f"workdir  {workdir}", style="dim")
+    if experts:
+        term.print(f"experts  {', '.join(experts)} (pinned)", style="dim")
+    term.print("Enter to send a request; /exit or Ctrl-D to leave.\n", style="dim")
+
+    loop = asyncio.get_running_loop()
+    exit_code = 0
+    while True:
+        try:
+            # input() blocks the OS thread, not the loop — routing and expert
+            # work for a PREVIOUS turn already finished before we prompt again,
+            # so this never stalls anything that should be running concurrently.
+            line = await loop.run_in_executor(None, input, "> ")
+        except EOFError:
+            term.print("")
+            break
+        text = line.strip()
+        if not text:
+            continue
+        if text in ("/exit", "/quit", "/q"):
+            break
+        if text == "/help":
+            term.print("/exit, /quit, /q   leave  ·  anything else is sent to the bench")
+            continue
+
+        try:
+            report = await orchestrator.run(text)
+        except Exception as exc:  # noqa: BLE001 - one bad turn must not end the chat
+            term.error(f"{type(exc).__name__}: {exc}")
+            continue
+
+        exit_code = _report(report, orchestrator, args, term)
+        term.print("")
+
+    return exit_code
+
+
 def _report(report: Any, orchestrator: Any, args: argparse.Namespace, term: _Term) -> int:
     """Print a RunReport and turn it into an exit code.
 
@@ -964,6 +1032,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--tui", action="store_true", help="show the terminal view during the run")
     run.add_argument("--web", action="store_true", help="serve the browser world during the run")
     run.set_defaults(handler=cmd_run)
+
+    chat = subparsers.add_parser(
+        "chat", help="plain terminal REPL — ask things, one turn at a time, no UI"
+    )
+    chat.add_argument("--experts", metavar="A,B", help="pin these experts and skip routing")
+    _add_policy_flags(chat)
+    chat.add_argument("--json", action="store_true", help="print each turn's report as JSON")
+    chat.set_defaults(handler=cmd_chat)
 
     watch = subparsers.add_parser("watch", help="reactive loop over files and job output")
     watch.add_argument(

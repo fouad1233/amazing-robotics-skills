@@ -32,3 +32,14 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+# PIE790: ruff considers a bare `...` after a docstring "unnecessary" and
+# deletes it under --fix. In NOOA, a docstring-then-`...` body is not dead
+# code -- it is what marks a method as agentic (the AgentMeta metaclass keys
+# `needs_generation` off the literal Ellipsis). Deleting it silently turns the
+# method into a no-op that returns None instead of ever calling the LLM, with
+# no error at lint time, import time, or call time until something notices the
+# result is None. This bit us for real on 2026-08-12: `ruff check --fix` on
+# this package stripped the `...` from every agentic method it touched.
+ignore = ["PIE790"]

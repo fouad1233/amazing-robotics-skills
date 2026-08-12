@@ -167,7 +167,7 @@ class ReviewerAgent(RoboAgent):
         something or waste a rebuild, minor when the claim is probably true but
         under-evidenced.
         """
-        ...  # noqa: PIE790 - the ellipsis IS the body; NOOA reads it as agentic
+        ...
 
     async def critique(self, plan_summary: str) -> list[Finding]:
         """Find what is wrong with this plan, worst first.
@@ -181,7 +181,7 @@ class ReviewerAgent(RoboAgent):
         empty list is a real answer — say nothing rather than manufacture a
         concern about a sound plan.
         """
-        ...  # noqa: PIE790 - the ellipsis IS the body; NOOA reads it as agentic
+        ...
 
     # -- deterministic domain knowledge ----------------------------------
 

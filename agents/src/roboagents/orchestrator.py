@@ -209,7 +209,7 @@ class Orchestrator(Agent):
         # as the starting point. The roster is on screen before a single expert
         # name is chosen, so there is nothing to hallucinate.
         print(self.roster_table())
-        ...  # noqa: PIE790 - the ellipsis IS the body; NOOA reads it as agentic
+        ...
 
     # -- deterministic helpers the router calls ---------------------------
 
@@ -396,6 +396,23 @@ class Orchestrator(Agent):
                 )
                 break
 
+            if not isinstance(result, WorkResult):
+                # A CodeAct session can end its turns without ever calling
+                # return_result() — NOOA hands back None rather than raising.
+                # Weaker/local models hit this more than hosted ones. Treat it
+                # exactly like a raised exception: it is a failure, not "no
+                # opinion", and it must not reach `.summary` below.
+                detail = f"expert.execute() returned {result!r}, not a WorkResult"
+                stream.emit(Kind.ERROR, actor, text=detail)
+                stream.emit(Kind.TASK_FINISHED, actor, text="no result", succeeded=False)
+                result = WorkResult(
+                    summary=f"{assignment.expert} finished without producing a result "
+                    "(the model likely ended its turns without returning one)",
+                    succeeded=False,
+                    evidence=detail,
+                )
+                break
+
             stream.emit(
                 Kind.TASK_FINISHED, actor, text=result.summary, succeeded=result.succeeded,
                 attempt=attempts,
@@ -474,6 +491,15 @@ class Orchestrator(Agent):
                     detail=traceback.format_exc(),
                 )
                 return None
+
+        if not isinstance(verdict, Verdict):
+            # Same CodeAct-ends-without-return_result gap as in _work: this is
+            # "nobody checked" (None), not "checked and it looked fine".
+            stream.emit(
+                Kind.ERROR, actor, target=subject,
+                text=f"reviewer.verify() returned {verdict!r}, not a Verdict; unreviewed.",
+            )
+            return None
 
         stream.emit(
             Kind.VERDICT,

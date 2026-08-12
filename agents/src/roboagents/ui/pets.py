@@ -460,58 +460,114 @@ def _screen_geometry() -> tuple[int, int]:
 # --------------------------------------------------------------------------
 
 
-class Console(Gtk.Window):
-    """A small always-on-top entry box that submits prompts to the bench.
+_CSS = b"""
+.robo-console { background-color: #12151b; }
+.robo-console textview { background-color: #12151b; color: #d7dee9;
+  font-family: monospace; font-size: 10.5pt; }
+.robo-console textview text { background-color: #12151b; }
+.robo-console entry { background-color: #0b0e13; color: #d7dee9;
+  border: 1px solid #232b38; }
+.robo-console label.status { color: #7a8698; }
+"""
 
-    Deliberately NOT click-through: this is the one window you are meant to
-    interact with. It posts to the web server's ``/api/prompt``, so it works
-    whether the bench is in this machine's browser session or not.
+
+class Console(Gtk.Window):
+    """The window you actually talk to the bench through.
+
+    A normal, decorated, taskbar-visible window — not an overlay — so it
+    behaves like any other app: minimize it, alt-tab to it, drag it around.
+    The pets stay click-through and out of the way; this is the one window
+    with a keyboard focus, and it is where replies live once you send a
+    prompt: a scrolling transcript above the entry box, not just a speech
+    bubble that fades after a few seconds.
+
+    Posts to the web server's ``/api/prompt``, so it works whether the bench
+    lives in this machine's browser session or was started headless.
     """
 
     def __init__(self, api_url: str) -> None:
         super().__init__(title="roboagents console")
         self.api_url = api_url
-        self.set_keep_above(True)
-        self.set_decorated(False)
-        self.set_skip_taskbar_hint(True)
-        self.set_default_size(520, 40)
-        self.set_app_paintable(True)
+        self.set_default_size(560, 380)
+        self.set_keep_above(False)  # a minimized/backgrounded window must stay that way
+        self.get_style_context().add_class("robo-console")
 
-        screen = self.get_screen()
-        visual = screen.get_rgba_visual()
-        if visual is not None:
-            self.set_visual(visual)
-        self.connect("draw", self._on_draw)
+        provider = Gtk.CssProvider()
+        provider.load_from_data(_CSS)
+        Gtk.StyleContext.add_provider_for_screen(
+            self.get_screen(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
 
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        box.set_margin_start(10)
-        box.set_margin_end(10)
-        box.set_margin_top(6)
-        box.set_margin_bottom(6)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
+        self.log_buffer = Gtk.TextBuffer()
+        self.log_view = Gtk.TextView(buffer=self.log_buffer)
+        self.log_view.set_editable(False)
+        self.log_view.set_cursor_visible(False)
+        self.log_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.log_view.set_left_margin(10)
+        self.log_view.set_right_margin(10)
+        self.log_view.set_top_margin(8)
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_vexpand(True)
+        scroller.add(self.log_view)
+        outer.pack_start(scroller, True, True, 0)
+
+        bottom = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        bottom.set_margin_start(8)
+        bottom.set_margin_end(8)
+        bottom.set_margin_top(4)
+        bottom.set_margin_bottom(8)
+
+        self.status = Gtk.Label(label="connecting…", xalign=0)
+        self.status.get_style_context().add_class("status")
+        bottom.pack_start(self.status, False, False, 0)
+
+        entry_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.entry = Gtk.Entry()
         self.entry.set_placeholder_text("tell the bench what to do…")
         self.entry.connect("activate", self._on_submit)
-        box.pack_start(self.entry, True, True, 0)
+        entry_row.pack_start(self.entry, True, True, 0)
+        send = Gtk.Button(label="Send")
+        send.connect("clicked", self._on_submit)
+        entry_row.pack_start(send, False, False, 0)
+        bottom.pack_start(entry_row, False, False, 0)
 
-        self.status = Gtk.Label(label="")
-        box.pack_start(self.status, False, False, 0)
+        outer.pack_start(bottom, False, False, 0)
+        self.add(outer)
 
-        self.add(box)
         width, height = _screen_geometry()
-        self.move(int(width / 2 - 260), height - 130)
+        self.move(int(width / 2 - 280), max(20, height - 460))
 
-    def _on_draw(self, _widget: Gtk.Widget, cr: cairo.Context) -> None:
-        cr.set_operator(cairo.OPERATOR_SOURCE)
-        cr.set_source_rgba(0.08, 0.09, 0.12, 0.88)
-        cr.paint()
+        self.log("console", "type a prompt below and press Enter")
 
-    def _on_submit(self, _entry: Gtk.Entry) -> None:
+    # -- transcript --------------------------------------------------------
+
+    def log(self, actor: str, text: str, tag: str = "") -> None:
+        """Append one line. This is the answer to "where is the output":
+        every prompt, message, thought and tool result the pets receive lands
+        here, not only as a transient speech bubble over a sprite."""
+        stamp = time.strftime("%H:%M:%S")
+        end = self.log_buffer.get_end_iter()
+        prefix = f"[{stamp}] " if actor == "console" else f"[{stamp}] {actor}: "
+        self.log_buffer.insert(end, prefix + text.strip() + "\n")
+        # Trim so a long session cannot grow the buffer without bound.
+        if self.log_buffer.get_line_count() > 600:
+            start = self.log_buffer.get_start_iter()
+            cut = self.log_buffer.get_iter_at_line(100)
+            self.log_buffer.delete(start, cut)
+        mark = self.log_buffer.create_mark(None, self.log_buffer.get_end_iter(), False)
+        self.log_view.scroll_to_mark(mark, 0.0, False, 0.0, 1.0)
+
+    # -- submitting ----------------------------------------------------
+
+    def _on_submit(self, _widget: Gtk.Widget) -> None:
         text = self.entry.get_text().strip()
         if not text:
             return
         self.entry.set_text("")
-        self.status.set_text("sending…")
+        self.log("console", f"sending: {text}")
         # Off the GTK thread: an HTTP round trip must not freeze the pets.
         threading.Thread(target=self._post, args=(text,), daemon=True).start()
 
@@ -527,13 +583,14 @@ class Console(Gtk.Window):
             with urllib.request.urlopen(request, timeout=10) as response:
                 message = "queued" if response.status in (200, 202) else f"http {response.status}"
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode(errors="replace")[:60]
+            detail = exc.read().decode(errors="replace")[:200]
             message = f"{exc.code}: {detail}"
         except (urllib.error.URLError, OSError) as exc:
             message = f"no bench: {exc}"
-        GLib.idle_add(self.status.set_text, message)
+        GLib.idle_add(self.note, message)
 
     def note(self, text: str) -> None:
+        """Update the one-line bench status (busy/ready/queued/error)."""
         self.status.set_text(text)
 
 
@@ -573,6 +630,7 @@ class Desktop:
         actor = event.get("actor", "")
         text = event.get("text", "") or ""
         data = event.get("data") or {}
+        log = self.console.log if self.console is not None else lambda *a, **k: None
 
         if kind == "agent_spawned":
             self._spawn(actor, str(data.get("domain", "")))
@@ -586,9 +644,12 @@ class Desktop:
                 pet.set_state(str(data.get("state", "")), text)
         elif kind in ("message", "prompt"):
             if kind == "prompt":
+                log("you", text)
                 if self.console is not None:
                     self.console.note("sent")
                 return
+            target = event.get("target") or ""
+            log(f"{actor} -> {target}" if target else actor, text)
             pet = self.pets.get(actor) or self._spawn(actor)
             if pet:
                 pet.say(text)
@@ -596,15 +657,24 @@ class Desktop:
             pet = self.pets.get(actor)
             if pet:
                 pet.set_state("thinking", text)
+            if text:
+                log(actor, text)
         elif kind == "tool_result":
             pet = self.pets.get(actor)
             if pet:
                 pet.set_state("working", text)
+            ok = data.get("ok", True)
+            log(actor, text if ok else f"FAILED: {text}")
         elif kind == "error":
             pet = self.pets.get(actor)
             if pet:
                 pet.set_state("failed", text)
                 pet.say(text)
+            log(actor, f"ERROR: {text}")
+        elif kind == "verdict":
+            log(actor, text)
+        elif kind in ("run_started", "run_finished"):
+            log("bench", text or kind)
         elif kind == "bench_state" and self.console is not None:
             busy = bool(data.get("busy"))
             pending = int(data.get("pending", 0) or 0)

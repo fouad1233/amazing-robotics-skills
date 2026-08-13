@@ -200,6 +200,23 @@ class RoboAgent(Agent):
         were wrong, and put its real output in `evidence`. If it failed, say so
         and report the actual error; a truthful failure is worth more than an
         optimistic summary.
+
+        A missing dependency is not automatically a reason to stop. If a fix is
+        ordinary and within scope — installing a package into the venv the task
+        already names, running a command the repository documents, creating a
+        directory — do it and continue, the same way you would if a human asked
+        you to get this done rather than to report on it. Reserve `needs_human`
+        in your final answer for things that genuinely need a person: physical
+        access, credentials you do not have, a reboot, or a choice with more
+        than one defensible answer. Before reporting "X is missing", check
+        whether the agent has a deterministic helper that already answers that
+        question from the documented paths — a helper's answer is evidence; a
+        guess from an unrelated interpreter or the wrong directory is not.
+
+        `self.shell.run(...)` is a coroutine — always `await` it. An unawaited
+        call does not error immediately; it silently hands you the coroutine
+        object itself instead of real output, and anything you conclude from
+        that object's text is wrong.
         """
         ...
 

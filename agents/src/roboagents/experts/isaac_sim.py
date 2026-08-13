@@ -25,9 +25,17 @@ from ..llm import Tier
 #: both drivers, and Warp initialises after printing the error. The segfault
 #: lands in the RTX renderer (`librtx.scenedb.plugin.so`) and its actual cause
 #: is still unidentified. Do not repeat the Warp explanation as if it were known.
+#: 2026-08-13: file-marker smoke test (not print(), which Kit's own logging
+#: redirect swallows) — app created, 30/30 app.update() steps completed,
+#: exit code 0. Overturns the earlier "untested at 13.0" note.
+_CONFIRMED_5X_AT_13_0 = (
+    "SIGSEGV confirmed on driver CUDA 13.2; CONFIRMED WORKING on 13.0 (580.173.02) "
+    "-- 30-step headless smoke test, clean exit 0, 2026-08-13"
+)
+
 CUDA_WINDOW: dict[str, tuple[float, float, str]] = {
-    "5.0": (12.8, 12.9, "SIGSEGV confirmed on driver CUDA 13.2; untested at 13.0"),
-    "5.1": (12.8, 12.9, "SIGSEGV confirmed on driver CUDA 13.2; untested at 13.0"),
+    "5.0": (12.8, 13.0, _CONFIRMED_5X_AT_13_0),
+    "5.1": (12.8, 13.0, "same line as 5.0; not independently re-tested at 13.0"),
     "6.0": (12.8, 13.9, "clean start/step/close confirmed on driver CUDA 13.2"),
     "6.1": (12.8, 13.9, "same line as 6.0"),
 }

@@ -3,13 +3,35 @@
 
 from __future__ import annotations
 
+import os
 import re
+import shlex
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
 from ..base import RoboAgent
 from ..llm import Tier
+
+#: A single reliable probe, run once with the venv's own interpreter. Checking
+#: torch with the wrong interpreter (bare `python3`, the system one) is the
+#: single most common false "missing" report this class of task produces —
+#: the answer looks identical whether the package is truly absent or just
+#: absent from *that* interpreter. Route everything through this instead of
+#: letting the model improvise a chain of ad hoc shell probes: a multi-step
+#: exploration a weaker local model has to get exactly right, every step, is
+#: exactly where it drops an `await` or gives up and reports "missing".
+_READINESS_PROBE = (
+    "import importlib.util, sys\n"
+    "print('python', sys.version.split()[0])\n"
+    "print('torch', 'present' if importlib.util.find_spec('torch') else 'ABSENT')\n"
+    "try:\n"
+    "    import torch\n"
+    "    print('torch_version', torch.__version__)\n"
+    "    print('cuda_available', torch.cuda.is_available())\n"
+    "except Exception as exc:\n"
+    "    print('torch_import_error', repr(exc))\n"
+)
 
 #: What each card is for, and the physical reason. The two GPUs are compute
 #: identical; only their links differ, and the link is what decides placement.
@@ -25,6 +47,31 @@ CHECKPOINT_GLOBS: tuple[str, ...] = ("*.ckpt", "*.safetensors")
 #: The unset matters as much as the exports, so both are captured.
 _PIN = re.compile(r"^(export|unset)\s+([A-Z_][A-Z0-9_]*)(?:=(.*))?$", re.MULTILINE)
 
+_VAR_REF = re.compile(r"\$\{(\w+)\}|\$(\w+)")
+
+
+def _expand_shell_vars(value: str, known: dict[str, str]) -> str:
+    """Resolve `$VAR`/`${VAR}` against already-parsed pins, then `$HOME`/env.
+
+    A raw captured value like ``"$HOME/robotics/models/InternVL3-1B"`` is not a
+    path — it is a shell expression. Treating the literal string as a
+    filesystem path reports a real, present directory as MISSING, which is
+    exactly the false-negative this method exists to prevent.
+    """
+    def repl(match: re.Match[str]) -> str:
+        name = match.group(1) or match.group(2)
+        if name in known:
+            return known[name]
+        if name == "HOME":
+            return str(Path.home())
+        return os.environ.get(name, match.group(0))
+
+    previous: str | None = None
+    while previous != value:
+        previous = value
+        value = _VAR_REF.sub(repl, value)
+    return value
+
 
 class VLAAgent(RoboAgent):
     """Vision-language-action researcher. This is the thesis work; be exact.
@@ -35,6 +82,15 @@ class VLAAgent(RoboAgent):
     Train on GPU1 and leave GPU0 for simulation, and prefer two independent
     single-GPU runs to DDP: these cards have no NVLink and no peer-to-peer.
     Report the metric a run actually printed, never the one you expected.
+
+    Asked to run TIC-VLA: call `self.tic_vla_readiness()` first — one reliable
+    check of the real paths, not a guess from the system interpreter — then
+    `self.benchmark_command(...)` for the exact command to run it. "CoT" is
+    already baked into the released checkpoint; there is no separate flag for
+    it, only `--debug_print` to surface the reasoning as it runs. Isaac Sim
+    5.0.0 is confirmed working on this machine's current driver — do not
+    report a driver mismatch as the cause of a failure without checking
+    IsaacSimAgent's `driver_compatibility()` first.
     """
 
     domain: ClassVar[str] = "vla"
@@ -169,6 +225,83 @@ class VLAAgent(RoboAgent):
             count = sum(1 for _ in path.rglob("*")) if path.is_dir() else 1
             rows.append(f"{when}  {path.name}  ({count} files)")
         return "\n".join(rows)
+
+    async def tic_vla_readiness(self) -> str:
+        """One reliable answer for "is TIC-VLA ready to run", instead of a
+        chain of shell commands the model has to improvise correctly.
+
+        Checks, against the exact paths ``env.sh`` pins — not guessed paths,
+        not the system interpreter: the `tic-vla` venv's own torch and CUDA,
+        the InternVL3-1B base model directory, the TIC-VLA checkpoint file,
+        and the DynaNav benchmark runner and its `generate_commands.py`. TIC-VLA
+        is trained on CoT-annotated data already — "CoT" here is baked into the
+        checkpoint, not a runtime flag, so there is nothing to enable beyond
+        pointing the benchmark at it. Call this BEFORE reporting anything as
+        missing; a claim of "torch not found" or "model missing" that did not
+        come from this method's output is very likely checking the wrong place.
+        """
+        root = self.workdir / "TIC-VLA"
+        rows = [f"TIC-VLA repo: {'present' if root.is_dir() else 'MISSING'} at {root}"]
+
+        env_sh = root / "env.sh"
+        pins: dict[str, str] = {}
+        if env_sh.is_file():
+            # env.sh exports build on each other (TICVLA_DYNANAV_ROOT expands
+            # ${TICVLA_ROOT}, for instance), so each value is resolved against
+            # what has already been parsed, in file order, before moving on.
+            for verb, name, value in _PIN.findall(env_sh.read_text(errors="replace")):
+                if verb == "export" and value.strip():
+                    pins[name] = _expand_shell_vars(value.strip().strip('"'), pins)
+            rows.append(f"env.sh: present, {len(pins)} exports")
+        else:
+            rows.append(f"env.sh: MISSING at {env_sh}")
+
+        venv_python = Path.home() / "envs" / "tic-vla" / "bin" / "python"
+        if venv_python.is_file():
+            probe = await self.env._sh(f"{shlex.quote(str(venv_python))} -c {shlex.quote(_READINESS_PROBE)}")
+            rows.append(f"tic-vla venv ({venv_python}):")
+            rows.extend(f"  {line}" for line in probe.strip().splitlines())
+        else:
+            rows.append(f"tic-vla venv: MISSING interpreter at {venv_python}")
+
+        base_model = Path(pins.get("TICVLA_BASE_MODEL_PATH", str(self.workdir / "models" / "InternVL3-1B")))
+        if base_model.is_dir():
+            n = sum(1 for _ in base_model.iterdir())
+            rows.append(f"base model: present, {n} files at {base_model}")
+        else:
+            rows.append(f"base model: MISSING at {base_model}")
+
+        ckpt = Path(pins.get("TICVLA_CHECKPOINT_PATH", str(self.workdir / "models" / "TIC-VLA-model.ckpt")))
+        if ckpt.is_file():
+            rows.append(f"checkpoint: present, {self._human(ckpt.stat().st_size)} at {ckpt}")
+        else:
+            rows.append(f"checkpoint: MISSING at {ckpt}")
+
+        dynanav = root / "DynaNav"
+        for name in ("benchmark.py", "run_benchmark.sh", "generate_commands.py"):
+            path = dynanav / name
+            rows.append(f"DynaNav/{name}: {'present' if path.is_file() else 'MISSING'}")
+
+        return "\n".join(rows)
+
+    def benchmark_command(self, config: str = "benchmark_local.yaml", gpu: int = 0) -> str:
+        """The exact, safe command to run the DynaNav/TIC-VLA benchmark.
+
+        Returns the command; it does not run it. `--debug_print` is what
+        surfaces the model's step-by-step reasoning during the run — that is
+        the "thinking" visualisation, not a separate flag. GPU is pinned with
+        `--/physics/cudaDevice=N`, never `CUDA_VISIBLE_DEVICES`: Kit warns at
+        startup that setting it for a process that launches Isaac Sim can
+        cause crashes. `run_benchmark.sh` already builds this correctly — this
+        method exists so the model does not have to reconstruct it by hand and
+        risk reintroducing the unsafe form.
+        """
+        script = self.workdir / "TIC-VLA" / "DynaNav" / "run_benchmark.sh"
+        cfg = config if config.startswith("/") else f"DynaNav/configs/{config}"
+        return (
+            f"cd {shlex.quote(str(self.workdir / 'TIC-VLA'))} && source env.sh && "
+            f"TICVLA_GPU={int(gpu)} {shlex.quote(str(script))} {shlex.quote(cfg)} --debug_print"
+        )
 
     # -- internals -------------------------------------------------------
 

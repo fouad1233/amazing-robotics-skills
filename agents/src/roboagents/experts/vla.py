@@ -91,6 +91,11 @@ class VLAAgent(RoboAgent):
     5.0.0 is confirmed working on this machine's current driver — do not
     report a driver mismatch as the cause of a failure without checking
     IsaacSimAgent's `driver_compatibility()` first.
+
+    A CUDA OOM during a closed-loop benchmark is a placement bug, not a
+    too-big model: the scene, not the checkpoint, fills the card. Read
+    `self.gpu_split()` and put inference on the card the simulator is not
+    rendering on, then re-run — do not report it as a hardware limit.
     """
 
     domain: ClassVar[str] = "vla"
@@ -170,6 +175,21 @@ class VLAAgent(RoboAgent):
                 "Never set it for a process that starts Isaac Sim — Kit warns at startup "
                 "that it causes crashes; use --/physics/cudaDevice=N and "
                 "--/renderer/multiGpu/enabled=false instead."
+            ),
+            "",
+            (
+                "Closed-loop evaluation puts a model and a simulator in ONE process, and "
+                "they compete for one card. Measured 2026-08-13: the DynaNav office scene "
+                "left Isaac Sim holding 25.4 GiB of GPU0's 31.35 GiB, and loading the "
+                "TIC-VLA checkpoint onto the same device died with "
+                "'CUDA out of memory. Tried to allocate 260.00 MiB'. The checkpoint is "
+                "only ~1.8 GiB — the model is not what is large, the scene is."
+            ),
+            (
+                "So split them: simulation on GPU0, inference on GPU1 "
+                "(TICVLA_MODEL_DEVICE=cuda:1). The x4 link does not matter here — per step "
+                "it carries one camera image over and nine floats back. Read an OOM in a "
+                "closed-loop run as a placement bug, not as 'the model does not fit'."
             ),
         ]
         return "\n".join(rows)
@@ -284,7 +304,12 @@ class VLAAgent(RoboAgent):
 
         return "\n".join(rows)
 
-    def benchmark_command(self, config: str = "benchmark_local.yaml", gpu: int = 0) -> str:
+    def benchmark_command(
+        self,
+        config: str = "benchmark_local.yaml",
+        gpu: int = 0,
+        inference_device: str = "cuda:1",
+    ) -> str:
         """The exact, safe command to run the DynaNav/TIC-VLA benchmark.
 
         Returns the command; it does not run it. `--debug_print` is what
@@ -292,15 +317,26 @@ class VLAAgent(RoboAgent):
         the "thinking" visualisation, not a separate flag. GPU is pinned with
         `--/physics/cudaDevice=N`, never `CUDA_VISIBLE_DEVICES`: Kit warns at
         startup that setting it for a process that launches Isaac Sim can
-        cause crashes. `run_benchmark.sh` already builds this correctly — this
+        cause crashes.
+
+        The two devices must differ. Simulation and inference share one process
+        here, and the scene is the memory hog — see `self.gpu_split()` for the
+        measurement. `run_benchmark.sh` already builds this correctly; this
         method exists so the model does not have to reconstruct it by hand and
-        risk reintroducing the unsafe form.
+        risk reintroducing either unsafe form.
         """
         script = self.workdir / "TIC-VLA" / "DynaNav" / "run_benchmark.sh"
         cfg = config if config.startswith("/") else f"DynaNav/configs/{config}"
+        if inference_device == f"cuda:{int(gpu)}":
+            return (
+                f"# refusing to build this: inference_device={inference_device} is the same "
+                f"card Isaac Sim renders on (gpu={gpu}). That is the CUDA OOM of 2026-08-13. "
+                f"Call self.gpu_split() for why, then pass a different inference_device."
+            )
         return (
             f"cd {shlex.quote(str(self.workdir / 'TIC-VLA'))} && source env.sh && "
-            f"TICVLA_GPU={int(gpu)} {shlex.quote(str(script))} {shlex.quote(cfg)} --debug_print"
+            f"TICVLA_GPU={int(gpu)} TICVLA_MODEL_DEVICE={shlex.quote(inference_device)} "
+            f"{shlex.quote(str(script))} {shlex.quote(cfg)} --debug_print"
         )
 
     # -- internals -------------------------------------------------------

@@ -96,6 +96,14 @@ class VLAAgent(RoboAgent):
     too-big model: the scene, not the checkpoint, fills the card. Read
     `self.gpu_split()` and put inference on the card the simulator is not
     rendering on, then re-run — do not report it as a hardware limit.
+
+    `gpu_split()`'s GPU0-for-simulation default assumes a clean card. It is
+    not: this whole session is driven by an Ollama model, and Ollama commonly
+    keeps its weights resident on GPU0. Call `self.env.gpu()` before building
+    `self.benchmark_command(...)` — if GPU0 is already carrying enough that
+    Isaac Sim's ~25 GiB renderer footprint would not fit beside it, swap the
+    roles for this run (`gpu=1`, `inference_device="cuda:0"`) rather than
+    running the default and letting it OOM on a collision you could see coming.
     """
 
     domain: ClassVar[str] = "vla"
@@ -190,6 +198,17 @@ class VLAAgent(RoboAgent):
                 "(TICVLA_MODEL_DEVICE=cuda:1). The x4 link does not matter here — per step "
                 "it carries one camera image over and nine floats back. Read an OOM in a "
                 "closed-loop run as a placement bug, not as 'the model does not fit'."
+            ),
+            "",
+            (
+                "That default assumes GPU0 is otherwise empty. It usually is not — call "
+                "`self.env.gpu()` and check, before trusting it. This very session runs on an "
+                "Ollama model, and Ollama keeps its weights wherever it started, commonly "
+                "GPU0; ~12 GiB of Ollama plus Isaac Sim's ~25 GiB renderer footprint does not "
+                "fit in 32 GiB. If GPU0 is already carrying real memory when you check, swap "
+                "roles for this run instead of running the default into a foreseeable OOM: "
+                "`self.benchmark_command(gpu=1, inference_device='cuda:0')` puts the empty "
+                "card under Isaac Sim and the checkpoint beside whatever is already on GPU0."
             ),
         ]
         return "\n".join(rows)
